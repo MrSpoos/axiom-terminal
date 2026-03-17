@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
+const ANTHROPIC_KEY = process.env.REACT_APP_ANTHROPIC_KEY;
 
 const TICKER_SYMBOLS = ["SPY","QQQ","IWM","GLD","TLT"];
 const DEFAULT_TICKERS = [
@@ -10,7 +11,6 @@ const DEFAULT_TICKERS = [
   { sym: "GLD", name: "Gold ETF", price: 0, chg: 0, pct: 0 },
   { sym: "TLT", name: "20Y Treasury ETF", price: 0, chg: 0, pct: 0 },
 ];
-
 const ECONOMIC_DATA = [
   { name: "Fed Funds Rate", value: "5.25–5.50%", prev: "5.25–5.50%", trend: "neutral", next: "Jun 12" },
   { name: "CPI YoY", value: "3.2%", prev: "3.4%", trend: "down", next: "Apr 10" },
@@ -21,7 +21,6 @@ const ECONOMIC_DATA = [
   { name: "2Y Treasury", value: "4.69%", prev: "4.62%", trend: "up", next: "Live" },
   { name: "ISM Manuf.", value: "47.8", prev: "49.1", trend: "down", next: "Apr 1" },
 ];
-
 const OPTIONS_CHAIN = {
   underlying: "SPY", price: 527.43,
   expiries: ["Mar 15", "Mar 22", "Mar 28", "Apr 19", "May 17"],
@@ -38,7 +37,6 @@ const OPTIONS_CHAIN = {
     { strike: 545, callBid: 0.10, callAsk: 0.13, callOI: 31100, callIV: 17.1, putBid: 17.50, putAsk: 17.65, putOI: 14300, putIV: 16.9 },
   ],
 };
-
 const NEWS_ITEMS = [
   { time: "08:42", source: "WSJ", headline: "Fed officials signal patience on rate cuts as inflation remains sticky", impact: "high", tag: "MACRO" },
   { time: "08:31", source: "BBG", headline: "European Central Bank keeps rates on hold, hints at summer cut", impact: "medium", tag: "INTL" },
@@ -51,7 +49,6 @@ const NEWS_ITEMS = [
   { time: "07:08", source: "RTR", headline: "China trade data shows export growth slowing, yuan pressured", impact: "medium", tag: "INTL" },
   { time: "06:51", source: "CNBC", headline: "Put/call ratio spikes to 1.42 — highest reading since Oct 2023", impact: "high", tag: "OPTIONS" },
 ];
-
 const GAMMA_DATA = {
   ES: {
     price: 5274, levels: [
@@ -83,50 +80,26 @@ const GAMMA_DATA = {
   },
 };
 
-// ── Live price hook ───────────────────────────────────────────────────────
 function useLivePrices() {
   const [tickers, setTickers] = useState(DEFAULT_TICKERS);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [status, setStatus] = useState("loading");
-
   const fetchPrices = useCallback(async () => {
     try {
       const results = await Promise.all(
-        TICKER_SYMBOLS.map(sym =>
-          fetch(`https://api.polygon.io/v2/aggs/ticker/${sym}/prev?apiKey=${POLYGON_KEY}`)
-            .then(r => r.json())
-        )
+        TICKER_SYMBOLS.map(sym => fetch(`https://api.polygon.io/v2/aggs/ticker/${sym}/prev?apiKey=${POLYGON_KEY}`).then(r => r.json()))
       );
       const updated = results.map((data, i) => {
         const result = data.results?.[0];
         if (!result) return DEFAULT_TICKERS[i];
         const chg = result.c - result.o;
         const pct = (chg / result.o) * 100;
-        return {
-          sym: TICKER_SYMBOLS[i],
-          name: DEFAULT_TICKERS[i].name,
-          price: result.c,
-          chg: parseFloat(chg.toFixed(2)),
-          pct: parseFloat(pct.toFixed(2)),
-          high: result.h,
-          low: result.l,
-          volume: result.v,
-        };
+        return { sym: TICKER_SYMBOLS[i], name: DEFAULT_TICKERS[i].name, price: result.c, chg: parseFloat(chg.toFixed(2)), pct: parseFloat(pct.toFixed(2)) };
       });
-      setTickers(updated);
-      setLastUpdated(new Date());
-      setStatus("live");
-    } catch (e) {
-      setStatus("error");
-    }
+      setTickers(updated); setLastUpdated(new Date()); setStatus("live");
+    } catch { setStatus("error"); }
   }, []);
-
-  useEffect(() => {
-    fetchPrices();
-    const interval = setInterval(fetchPrices, 60000); // refresh every 60s
-    return () => clearInterval(interval);
-  }, [fetchPrices]);
-
+  useEffect(() => { fetchPrices(); const i = setInterval(fetchPrices, 60000); return () => clearInterval(i); }, [fetchPrices]);
   return { tickers, lastUpdated, status, refresh: fetchPrices };
 }
 
@@ -158,7 +131,12 @@ async function streamClaude(prompt, systemPrompt, onChunk, onDone) {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
       body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, stream: true, system: systemPrompt, messages: [{ role: "user", content: prompt }] }),
     });
     const reader = res.body.getReader();
@@ -209,7 +187,6 @@ function DirectionalBias({ tickers }) {
   const [loading, setLoading] = useState(false);
   const spy = tickers.find(t => t.sym === "SPY");
   const qqq = tickers.find(t => t.sym === "QQQ");
-
   const compute = useCallback(async () => {
     setLoading(true); setResult(null);
     let text = "";
@@ -217,28 +194,25 @@ function DirectionalBias({ tickers }) {
     const spyPct = spy?.pct ?? 0.21;
     const qqqPct = qqq?.pct ?? -0.21;
     await streamClaude(
-      `You are a quantitative futures strategist. Based on this LIVE market data, compute ES directional probability for TODAY.\nSPY: $${spyPrice} (${spyPct > 0 ? "+" : ""}${spyPct}%), QQQ: (${qqqPct > 0 ? "+" : ""}${qqqPct}%), VIX: 18.42\nES Spot: 5274, Net Gamma: +$0.6B, Gamma Flip: 5250, Call Wall: 5350, Put Wall: 5200\n10Y: 4.31%, 2Y: 4.69%, DXY: 104.83, Put/Call: 1.42\nISM: 47.8, GDP: 3.2%, CPI: 3.2%\nRespond ONLY with valid JSON, no markdown:\n{"bullPct":int,"bearPct":int,"bias":"BUY"|"SELL"|"NEUTRAL","confidence":"HIGH"|"MEDIUM"|"LOW","signal":"string","keyRisk":"string","targets":{"upside1":int,"upside2":int,"downside1":int,"downside2":int},"factors":[{"name":"string","weight":int,"direction":"bull"|"bear"|"neutral"}],"summary":"string"}`,
-      "You are a quantitative analyst. Respond ONLY with a valid JSON object. No markdown, no backticks.",
+      `Quantitative futures strategist. Compute ES directional probability for TODAY based on LIVE data.\nSPY: $${spyPrice} (${spyPct > 0 ? "+" : ""}${spyPct}%), QQQ: (${qqqPct > 0 ? "+" : ""}${qqqPct}%), VIX: 18.42\nES Spot: 5274, Net Gamma: +$0.6B, Gamma Flip: 5250, Call Wall: 5350, Put Wall: 5200\n10Y: 4.31%, 2Y: 4.69%, DXY: 104.83, Put/Call: 1.42\nISM: 47.8, GDP: 3.2%, CPI: 3.2%\nRespond ONLY with valid JSON no markdown:\n{"bullPct":int,"bearPct":int,"bias":"BUY"|"SELL"|"NEUTRAL","confidence":"HIGH"|"MEDIUM"|"LOW","signal":"string","keyRisk":"string","targets":{"upside1":int,"upside2":int,"downside1":int,"downside2":int},"factors":[{"name":"string","weight":int,"direction":"bull"|"bear"|"neutral"}],"summary":"string"}`,
+      "You are a quantitative analyst. Respond ONLY with valid JSON. No markdown, no backticks.",
       (c) => { text += c; },
       () => {
         try { setResult(JSON.parse(text.replace(/```json|```/g, "").trim())); }
-        catch { setResult({ bullPct: 52, bearPct: 48, bias: "NEUTRAL", confidence: "LOW", signal: "Parse error.", keyRisk: "N/A", targets: { upside1: 5300, upside2: 5325, downside1: 5250, downside2: 5225 }, factors: [], summary: "" }); }
+        catch { setResult({ bullPct: 52, bearPct: 48, bias: "NEUTRAL", confidence: "LOW", signal: "Analysis unavailable.", keyRisk: "N/A", targets: { upside1: 5300, upside2: 5325, downside1: 5250, downside2: 5225 }, factors: [], summary: "" }); }
         setLoading(false);
       }
     );
   }, [spy, qqq]);
-
   useEffect(() => { if (tickers.some(t => t.price > 0)) compute(); }, [tickers]);
-
   const biasColor = result?.bias === "BUY" ? "#00d4aa" : result?.bias === "SELL" ? "#ff4d6d" : "#f6c90e";
   const confColor = result?.confidence === "HIGH" ? "#00d4aa" : result?.confidence === "MEDIUM" ? "#f6c90e" : "#64748b";
-
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ width: 6, height: 6, borderRadius: "50%", background: loading ? "#f6c90e" : result ? "#00d4aa" : "#334155", animation: loading ? "pulse 1s infinite" : "none" }} />
-          <span style={{ fontSize: 10, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.08em" }}>{loading ? "COMPUTING MODEL…" : "AI PROBABILITY MODEL · LIVE"}</span>
+          <span style={{ fontSize: 10, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{loading ? "COMPUTING MODEL…" : "AI PROBABILITY MODEL · LIVE"}</span>
         </div>
         <button onClick={compute} style={{ fontSize: 9, color: "#4a9eff", background: "none", border: "1px solid rgba(74,158,255,0.3)", borderRadius: 3, padding: "2px 8px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>RECALCULATE</button>
       </div>
@@ -315,7 +289,7 @@ function GammaLevels() {
         <span style={{ color: data.price > data.flipPoint ? "#00d4aa" : "#ff4d6d" }}>{data.price > data.flipPoint ? "▲ Above Flip" : "▼ Below Flip"}</span>
       </div>
       <button onClick={() => setAiOpen(!aiOpen)} style={{ fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}>{aiOpen ? "▲ HIDE GAMMA ANALYSIS" : "▼ AI GAMMA ANALYSIS"}</button>
-      {aiOpen && <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160, flexShrink: 0 }}><AIAnalysis key={active} prompt={`Analyze the gamma profile for ${active}. Spot ${data.price}, Net Gamma ${data.netGamma}, ${data.regime} gamma regime, Flip at ${data.flipPoint}, Call Wall ${data.levels.find(l => l.type === "call_wall")?.price}, Put Wall ${data.levels.find(l => l.type === "put_wall")?.price}. Explain dealer hedging dynamics and best trade setup.`} /></div>}
+      {aiOpen && <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160, flexShrink: 0 }}><AIAnalysis key={active} prompt={`Analyze gamma profile for ${active}. Spot ${data.price}, Net Gamma ${data.netGamma}, ${data.regime} gamma regime, Flip at ${data.flipPoint}, Call Wall ${data.levels.find(l => l.type === "call_wall")?.price}, Put Wall ${data.levels.find(l => l.type === "put_wall")?.price}. Explain dealer hedging dynamics and best trade setup.`} /></div>}
     </div>
   );
 }
@@ -376,10 +350,7 @@ function MarketCards({ tickers, status, lastUpdated, refresh }) {
         {tickers.map((t) => (
           <div key={t.sym} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "10px 12px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>{t.sym}</div>
-                <div style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{t.name}</div>
-              </div>
+              <div><div style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>{t.sym}</div><div style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{t.name}</div></div>
               <Sparkline positive={t.chg >= 0} width={48} height={20} />
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
