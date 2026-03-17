@@ -51,32 +51,32 @@ const NEWS_ITEMS = [
 ];
 const GAMMA_DATA = {
   ES: {
-    price: 5674, levels: [
-      { price: 5750, type: "call_wall", label: "Call Wall", strength: 95, gamma: "+$2.1B" },
-      { price: 5725, type: "resistance", label: "Gamma Resist", strength: 72, gamma: "+$980M" },
-      { price: 5700, type: "resistance", label: "Key Resist", strength: 60, gamma: "+$620M" },
-      { price: 5690, type: "resistance", label: "Minor Resist", strength: 38, gamma: "+$290M" },
-      { price: 5674, type: "spot", label: "SPOT", strength: 100, gamma: "—" },
-      { price: 5650, type: "support", label: "Minor Support", strength: 35, gamma: "-$240M" },
-      { price: 5625, type: "support", label: "Key Support", strength: 65, gamma: "-$710M" },
-      { price: 5600, type: "put_wall", label: "Put Wall", strength: 88, gamma: "-$1.8B" },
-      { price: 5575, type: "support", label: "Major Support", strength: 80, gamma: "-$1.4B" },
+    price: 6698, levels: [
+      { price: 6800, type: "call_wall", label: "Call Wall", strength: 95, gamma: "+$2.1B" },
+      { price: 6775, type: "resistance", label: "Gamma Resist", strength: 72, gamma: "+$980M" },
+      { price: 6750, type: "resistance", label: "Key Resist", strength: 60, gamma: "+$620M" },
+      { price: 6725, type: "resistance", label: "Minor Resist", strength: 38, gamma: "+$290M" },
+      { price: 6698, type: "spot", label: "SPOT", strength: 100, gamma: "—" },
+      { price: 6675, type: "support", label: "Minor Support", strength: 35, gamma: "-$240M" },
+      { price: 6650, type: "support", label: "Key Support", strength: 65, gamma: "-$710M" },
+      { price: 6600, type: "put_wall", label: "Put Wall", strength: 88, gamma: "-$1.8B" },
+      { price: 6550, type: "support", label: "Major Support", strength: 80, gamma: "-$1.4B" },
     ],
-    flipPoint: 5650, zerogamma: 5645, callGamma: "$4.2B", putGamma: "$3.6B", netGamma: "+$0.6B", regime: "positive",
+    flipPoint: 6650, zerogamma: 6645, callGamma: "$4.2B", putGamma: "$3.6B", netGamma: "+$0.6B", regime: "positive",
   },
   NQ: {
-    price: 25000, levels: [
-      { price: 25800, type: "call_wall", label: "Call Wall", strength: 92, gamma: "+$1.4B" },
-      { price: 25600, type: "resistance", label: "Gamma Resist", strength: 68, gamma: "+$760M" },
-      { price: 25400, type: "resistance", label: "Key Resist", strength: 55, gamma: "+$440M" },
-      { price: 25200, type: "resistance", label: "Minor Resist", strength: 30, gamma: "+$180M" },
-      { price: 25000, type: "spot", label: "SPOT", strength: 100, gamma: "—" },
-      { price: 24800, type: "support", label: "Minor Support", strength: 32, gamma: "-$160M" },
-      { price: 24600, type: "support", label: "Key Support", strength: 70, gamma: "-$820M" },
-      { price: 24400, type: "put_wall", label: "Put Wall", strength: 85, gamma: "-$1.2B" },
-      { price: 24200, type: "support", label: "Major Support", strength: 75, gamma: "-$1.0B" },
+    price: 24667, levels: [
+      { price: 25200, type: "call_wall", label: "Call Wall", strength: 92, gamma: "+$1.4B" },
+      { price: 25000, type: "resistance", label: "Gamma Resist", strength: 68, gamma: "+$760M" },
+      { price: 24900, type: "resistance", label: "Key Resist", strength: 55, gamma: "+$440M" },
+      { price: 24800, type: "resistance", label: "Minor Resist", strength: 30, gamma: "+$180M" },
+      { price: 24667, type: "spot", label: "SPOT", strength: 100, gamma: "—" },
+      { price: 24500, type: "support", label: "Minor Support", strength: 32, gamma: "-$160M" },
+      { price: 24300, type: "support", label: "Key Support", strength: 70, gamma: "-$820M" },
+      { price: 24000, type: "put_wall", label: "Put Wall", strength: 85, gamma: "-$1.2B" },
+      { price: 23800, type: "support", label: "Major Support", strength: 75, gamma: "-$1.0B" },
     ],
-    flipPoint: 24800, zerogamma: 24750, callGamma: "$2.8B", putGamma: "$2.2B", netGamma: "+$0.6B", regime: "positive",
+    flipPoint: 24400, zerogamma: 24350, callGamma: "$2.8B", putGamma: "$2.2B", netGamma: "+$0.6B", regime: "positive",
   },
 };
 
