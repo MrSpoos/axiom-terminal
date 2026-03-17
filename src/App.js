@@ -194,7 +194,9 @@ function DirectionalBias({ tickers }) {
     const spyPct = spy?.pct ?? 0.21;
     const qqqPct = qqq?.pct ?? -0.21;
     await streamClaude(
-      `Quantitative futures strategist. Compute ES directional probability for TODAY based on LIVE data.\nSPY: $${spyPrice} (${spyPct > 0 ? "+" : ""}${spyPct}%), QQQ: (${qqqPct > 0 ? "+" : ""}${qqqPct}%), VIX: 18.42\nES Spot: 5274, Net Gamma: +$0.6B, Gamma Flip: 5250, Call Wall: 5350, Put Wall: 5200\n10Y: 4.31%, 2Y: 4.69%, DXY: 104.83, Put/Call: 1.42\nISM: 47.8, GDP: 3.2%, CPI: 3.2%\nRespond ONLY with valid JSON no markdown:\n{"bullPct":int,"bearPct":int,"bias":"BUY"|"SELL"|"NEUTRAL","confidence":"HIGH"|"MEDIUM"|"LOW","signal":"string","keyRisk":"string","targets":{"upside1":int,"upside2":int,"downside1":int,"downside2":int},"factors":[{"name":"string","weight":int,"direction":"bull"|"bear"|"neutral"}],"summary":"string"}`,
+      `Quantitative futures strategist. Compute ES directional probability for TODAY based on LIVE data.\nSPY: $${spyPrice} (${spyPct > 0 ? "+" : ""}${spyPct}%), QQQ: (${qqqPct > 0 ? "+" : ""}${qqqPct}%), VIX at 25.10, ES at 6698, NQ at 24667, ES gamma flip at 6650
+, Call Wall: 5350ES Spot: 6698, Net Gamma: +$0.6B, Gamma Flip: 6650, Call Wall: 6800, Put Wall: 6600
+\n10Y: 4.31%, 2Y: 4.69%, DXY: 104.83, Put/Call: 1.42\nISM: 47.8, GDP: 3.2%, CPI: 3.2%\nRespond ONLY with valid JSON no markdown:\n{"bullPct":int,"bearPct":int,"bias":"BUY"|"SELL"|"NEUTRAL","confidence":"HIGH"|"MEDIUM"|"LOW","signal":"string","keyRisk":"string","targets":{"upside1":int,"upside2":int,"downside1":int,"downside2":int},"factors":[{"name":"string","weight":int,"direction":"bull"|"bear"|"neutral"}],"summary":"string"}`,
       "You are a quantitative analyst. Respond ONLY with valid JSON. No markdown, no backticks.",
       (c) => { text += c; },
       () => {
