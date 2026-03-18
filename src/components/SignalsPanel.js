@@ -1015,6 +1015,31 @@ function AISignalAnalyser({ chartData }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [fetchingATR, setFetchingATR] = useState(false);
+  const [qpLoading, setQpLoading] = useState(false);
+  const [qpMsg, setQpMsg] = useState(null); // { type: "success"|"warning"|"error", text }
+
+  const calcQP = useCallback(async () => {
+    setQpLoading(true); setQpMsg(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/qp-calculate?instrument=${form.instrument}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Failed");
+      const f = d.fields;
+      if (f) {
+        setForm(prev => ({
+          ...prev,
+          d1QP: String(f.d1QP), d1QHi: String(f.d1QHi), d1QMid: String(f.d1QMid), d1QLo: String(f.d1QLo),
+          h4QP: String(f.h4QP), h4QHi: String(f.h4QHi), h4QMid: String(f.h4QMid), h4QLo: String(f.h4QLo),
+        }));
+      }
+      if (d.valid) {
+        setQpMsg({ type: "success", text: `${d.direction} QP confirmed \u00b7 ${d.swingHighTime} \u2192 ${d.swingLowTime}` });
+      } else {
+        setQpMsg({ type: "warning", text: d.reason || "50% not yet triggered \u2014 pending levels shown" });
+      }
+    } catch (e) { setQpMsg({ type: "error", text: e.message }); }
+    setQpLoading(false);
+  }, [form.instrument]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -1139,11 +1164,26 @@ function AISignalAnalyser({ chartData }) {
       </div>
 
       {/* Quarterly Pivots */}
-      <div style={sectionStyle}>D1 QUARTERLY PIVOTS</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={sectionStyle}>D1 QUARTERLY PIVOTS</div>
+        <button onClick={calcQP} disabled={qpLoading} style={{
+          fontSize: 7, fontFamily: MONO, fontWeight: 700, color: "#4a9eff",
+          background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.2)",
+          borderRadius: 3, padding: "2px 8px", cursor: qpLoading ? "default" : "pointer",
+          letterSpacing: "0.06em",
+        }}>{qpLoading ? "..." : "CALC QP"}</button>
+      </div>
+      {qpMsg && (
+        <div style={{
+          fontSize: 8, fontFamily: MONO, padding: "3px 6px", borderRadius: 3, marginBottom: 2,
+          color: qpMsg.type === "success" ? "#00d4aa" : qpMsg.type === "warning" ? "#f6c90e" : "#ff4d6d",
+          background: (qpMsg.type === "success" ? "#00d4aa" : qpMsg.type === "warning" ? "#f6c90e" : "#ff4d6d") + "10",
+        }}>{qpMsg.text}</div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6 }}>
-        <div><div style={labelStyle}>QP</div><input style={inputStyle} value={form.d1QP} onChange={e => set("d1QP", e.target.value)} /></div>
         <div><div style={labelStyle}>QHi</div><input style={inputStyle} value={form.d1QHi} onChange={e => set("d1QHi", e.target.value)} /></div>
-        <div><div style={labelStyle}>QMid</div><input style={inputStyle} value={form.d1QMid} onChange={e => set("d1QMid", e.target.value)} /></div>
+        <div><div style={labelStyle}>QP (Mid)</div><input style={inputStyle} value={form.d1QP} onChange={e => set("d1QP", e.target.value)} /></div>
+        <div><div style={labelStyle}>QMid (25%)</div><input style={inputStyle} value={form.d1QMid} onChange={e => set("d1QMid", e.target.value)} /></div>
         <div><div style={labelStyle}>QLo</div><input style={inputStyle} value={form.d1QLo} onChange={e => set("d1QLo", e.target.value)} /></div>
       </div>
 

@@ -1280,6 +1280,115 @@ Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using AT
   }
 });
 
+// ── /api/qp-calculate — D1 Q Point Calculator (swing-based quartile levels) ──
+app.get('/api/qp-calculate', async (req, res) => {
+  const { instrument } = req.query;
+  const tickerMap = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
+  const ticker = tickerMap[instrument];
+  if (!ticker) return res.status(400).json({ error: `Unknown instrument: ${instrument}` });
+
+  try {
+    const period2 = Math.floor(Date.now() / 1000);
+    const period1 = period2 - (180 * 24 * 60 * 60);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1d`;
+    const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!response.ok) throw new Error(`Yahoo Finance returned ${response.status}`);
+    const data = await response.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) throw new Error('No data from Yahoo Finance');
+
+    const quotes = result.indicators.quote[0];
+    const timestamps = result.timestamp;
+    const candles = timestamps.map((t, i) => ({
+      time: new Date(t * 1000).toISOString().split('T')[0],
+      open: quotes.open[i], high: quotes.high[i], low: quotes.low[i], close: quotes.close[i],
+    })).filter(c => c.high && c.low && c.close);
+
+    if (candles.length < 20) throw new Error('Not enough candle data');
+
+    const LOOKBACK = 5;
+    const swingHighs = [], swingLows = [];
+
+    for (let i = LOOKBACK; i < candles.length - LOOKBACK; i++) {
+      const c = candles[i];
+      const isSwingHigh = candles.slice(i - LOOKBACK, i).every(x => x.high <= c.high) &&
+                          candles.slice(i + 1, i + LOOKBACK + 1).every(x => x.high <= c.high);
+      const isSwingLow = candles.slice(i - LOOKBACK, i).every(x => x.low >= c.low) &&
+                         candles.slice(i + 1, i + LOOKBACK + 1).every(x => x.low >= c.low);
+      if (isSwingHigh) swingHighs.push({ index: i, price: c.high, time: c.time });
+      if (isSwingLow) swingLows.push({ index: i, price: c.low, time: c.time });
+    }
+
+    if (!swingHighs.length || !swingLows.length) {
+      return res.json({ valid: false, reason: 'No confirmed swings found on D1' });
+    }
+
+    const currentPrice = candles[candles.length - 1].close;
+    let bestPair = null;
+    const recentHighs = [...swingHighs].sort((a, b) => b.index - a.index);
+    const recentLows = [...swingLows].sort((a, b) => b.index - a.index);
+
+    for (const sh of recentHighs.slice(0, 5)) {
+      for (const sl of recentLows.slice(0, 5)) {
+        const H = sh.price, L = sl.price;
+        if (H <= L) continue;
+        const range = H - L;
+        const middle = L + range * 0.50;
+        const highFirst = sh.index < sl.index;
+        const triggered = highFirst ? currentPrice <= middle : currentPrice >= middle;
+        if (triggered) { bestPair = { H, L, sh, sl, highFirst, range }; break; }
+      }
+      if (bestPair) break;
+    }
+
+    const r = v => Math.round(v * 100) / 100;
+
+    if (!bestPair) {
+      const sh = recentHighs[0], sl = recentLows[0];
+      const H = sh.price, L = sl.price, range = H - L, middle = L + range * 0.50;
+      return res.json({
+        valid: false,
+        reason: `50% retracement not yet triggered. Price (${r(currentPrice)}) hasn't crossed Middle Trigger (${r(middle)})`,
+        pendingLevels: {
+          swingHigh: r(H), qPointHigh: r(L + range * 0.75), middleTrigger: r(middle),
+          qPointLow: r(L + range * 0.25), swingLow: r(L),
+          swingHighTime: sh.time, swingLowTime: sl.time,
+        },
+        fields: {
+          d1QHi: r(L + range * 0.75), d1QP: r(middle),
+          d1QMid: r(L + range * 0.25), d1QLo: r(L),
+          h4QHi: r(L + range * 0.75), h4QP: r(middle),
+          h4QMid: r(L + range * 0.25), h4QLo: r(L),
+        },
+      });
+    }
+
+    const { H, L, sh, sl, highFirst, range } = bestPair;
+    const levels = {
+      swingHigh: r(H), qPointHigh: r(L + range * 0.75), middleTrigger: r(L + range * 0.50),
+      qPointLow: r(L + range * 0.25), swingLow: r(L),
+    };
+    // Map to frontend form field names
+    const fieldMap = {
+      d1QHi: r(L + range * 0.75), d1QP: r(L + range * 0.50),
+      d1QMid: r(L + range * 0.25), d1QLo: r(L),
+      h4QHi: r(L + range * 0.75), h4QP: r(L + range * 0.50),
+      h4QMid: r(L + range * 0.25), h4QLo: r(L),
+    };
+
+    res.json({
+      valid: true, instrument, ticker,
+      direction: highFirst ? 'bearish' : 'bullish',
+      trigger: 'confirmed \u2014 price crossed 50% of swing',
+      swingHighTime: sh.time, swingLowTime: sl.time,
+      currentPrice: r(currentPrice), levels, fields: fieldMap,
+    });
+  } catch (err) {
+    console.error('[QP Calc]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── /api/h4-zones — H4 Supply/Demand Zone Detection ─────────────────────────
 app.get('/api/h4-zones', async (req, res) => {
   const symbol = req.query.symbol || 'ES=F';
@@ -1315,6 +1424,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
   console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
+  console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
   if (!FRED_KEY) {
     console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);
