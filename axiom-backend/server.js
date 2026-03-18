@@ -1,4 +1,4 @@
-require('dotenv').config();
+// Env vars provided by Railway (locally, use .env with dotenv)
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
