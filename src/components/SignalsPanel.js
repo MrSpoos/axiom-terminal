@@ -1246,7 +1246,7 @@ function AISignalAnalyser({ chartData }) {
         const tv = TV[form.instrument] || 0.25;
         const tol = 10 * tv;
         const vah = parseFloat(form.vah), val = parseFloat(form.val);
-        const h4s = [form.h4QP, form.h4QHi, form.h4QMid, form.h4QLo].filter(Boolean).map(Number);
+        const h4s = [form.h4QP, form.h4QHi, form.h4QMid, form.h4QLo, form.h4SupplyNearest, form.h4DemandNearest].filter(Boolean).map(Number);
         const nearVAH = h4s.reduce((b, l) => { const d = Math.abs(l - vah); return (!b || d < b.d) ? { l, d } : b; }, null);
         const nearVAL = h4s.reduce((b, l) => { const d = Math.abs(l - val); return (!b || d < b.d) ? { l, d } : b; }, null);
         return (
