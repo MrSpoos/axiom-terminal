@@ -319,6 +319,10 @@ app.post('/api/ai', async (req, res) => {
 });
 
 // ── HEALTH CHECK ──────────────────────────────────────────────────────────────
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'axiom-backend' });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -328,7 +332,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Axiom Backend running on port ${PORT}`);
   console.log(`   /api/news    — Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
   console.log(`   /api/market  — VIX, ES Futures, NQ Futures (Yahoo Finance)`);
