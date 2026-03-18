@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
-const ANTHROPIC_KEY = process.env.REACT_APP_ANTHROPIC_KEY;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
 
 const TICKER_SYMBOLS = ["SPY","QQQ","IWM","GLD","TLT"];
 const DEFAULT_TICKERS = [
@@ -11,7 +11,7 @@ const DEFAULT_TICKERS = [
   { sym: "GLD", name: "Gold ETF", price: 0, chg: 0, pct: 0 },
   { sym: "TLT", name: "20Y Treasury ETF", price: 0, chg: 0, pct: 0 },
 ];
-const ECONOMIC_DATA = [
+const ECONOMIC_DATA_STATIC = [
   { name: "Fed Funds Rate", value: "5.25–5.50%", prev: "5.25–5.50%", trend: "neutral", next: "Jun 12" },
   { name: "CPI YoY", value: "3.2%", prev: "3.4%", trend: "down", next: "Apr 10" },
   { name: "Core PCE", value: "2.8%", prev: "2.9%", trend: "down", next: "Mar 29" },
@@ -37,7 +37,7 @@ const OPTIONS_CHAIN = {
     { strike: 545, callBid: 0.10, callAsk: 0.13, callOI: 31100, callIV: 17.1, putBid: 17.50, putAsk: 17.65, putOI: 14300, putIV: 16.9 },
   ],
 };
-const NEWS_ITEMS = [
+const NEWS_FALLBACK = [
   { time: "08:42", source: "WSJ", headline: "Fed officials signal patience on rate cuts as inflation remains sticky", impact: "high", tag: "MACRO" },
   { time: "08:31", source: "BBG", headline: "European Central Bank keeps rates on hold, hints at summer cut", impact: "medium", tag: "INTL" },
   { time: "08:19", source: "CNBC", headline: "Options market pricing in elevated volatility ahead of CPI print", impact: "high", tag: "OPTIONS" },
@@ -80,28 +80,117 @@ const GAMMA_DATA = {
   },
 };
 
+// ── HOOKS ─────────────────────────────────────────────────────────────────────
+
 function useLivePrices() {
   const [tickers, setTickers] = useState(DEFAULT_TICKERS);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [status, setStatus] = useState("loading");
+
+  const fetchFromYahoo = useCallback(async () => {
+    const r = await fetch(`${BACKEND_URL}/api/market`);
+    const d = await r.json();
+    if (!d.success || !d.data?.etfs?.length) throw new Error("No ETF data");
+    return d.data.etfs.map(e => ({
+      sym: e.sym, name: e.name, price: e.price, chg: e.chg, pct: e.pct,
+    }));
+  }, []);
+
   const fetchPrices = useCallback(async () => {
+    // Try Polygon first
+    let polygonOk = false;
     try {
       const results = await Promise.all(
-        TICKER_SYMBOLS.map(sym => fetch(`https://api.polygon.io/v2/aggs/ticker/${sym}/prev?apiKey=${POLYGON_KEY}`).then(r => r.json()))
+        TICKER_SYMBOLS.map(sym =>
+          fetch(`https://api.polygon.io/v2/aggs/ticker/${sym}/prev?apiKey=${POLYGON_KEY}`).then(r => r.json())
+        )
       );
       const updated = results.map((data, i) => {
         const result = data.results?.[0];
-        if (!result) return DEFAULT_TICKERS[i];
+        if (!result) return null;
         const chg = result.c - result.o;
         const pct = (chg / result.o) * 100;
         return { sym: TICKER_SYMBOLS[i], name: DEFAULT_TICKERS[i].name, price: result.c, chg: parseFloat(chg.toFixed(2)), pct: parseFloat(pct.toFixed(2)) };
       });
-      setTickers(updated); setLastUpdated(new Date()); setStatus("live");
-    } catch { setStatus("error"); }
-  }, []);
+      // Only accept Polygon data if at least one ticker returned a real price
+      if (updated.some(t => t !== null && t.price > 0)) {
+        polygonOk = true;
+        setTickers(updated.map((t, i) => t ?? DEFAULT_TICKERS[i]));
+        setLastUpdated(new Date()); setStatus("live");
+      }
+    } catch {}
+
+    // Yahoo Finance fallback via backend /api/market
+    if (!polygonOk) {
+      try {
+        const etfs = await fetchFromYahoo();
+        setTickers(etfs); setLastUpdated(new Date()); setStatus("live");
+      } catch { setStatus("error"); }
+    }
+  }, [fetchFromYahoo]);
+
   useEffect(() => { fetchPrices(); const i = setInterval(fetchPrices, 60000); return () => clearInterval(i); }, [fetchPrices]);
   return { tickers, lastUpdated, status, refresh: fetchPrices };
 }
+
+function useLiveNews() {
+  const [news, setNews] = useState(NEWS_FALLBACK);
+  const [newsStatus, setNewsStatus] = useState("static");
+  const fetchNews = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/news`);
+      const d = await r.json();
+      if (d.success && d.data?.length > 0) {
+        setNews(d.data);
+        setNewsStatus("live");
+      }
+    } catch { setNewsStatus("error"); }
+  }, []);
+  useEffect(() => {
+    fetchNews();
+    const interval = setInterval(fetchNews, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [fetchNews]);
+  return { news, newsStatus, refreshNews: fetchNews };
+}
+
+function useLiveMarket() {
+  const [market, setMarket] = useState({ vix: null, es: null, nq: null });
+  const [marketStatus, setMarketStatus] = useState("loading");
+  const fetchMarket = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/market`);
+      const d = await r.json();
+      if (d.success) { setMarket(d.data); setMarketStatus("live"); }
+      else setMarketStatus("error");
+    } catch { setMarketStatus("error"); }
+  }, []);
+  useEffect(() => {
+    fetchMarket();
+    const interval = setInterval(fetchMarket, 60000);
+    return () => clearInterval(interval);
+  }, [fetchMarket]);
+  return { market, marketStatus, refreshMarket: fetchMarket };
+}
+
+function useLiveMacro() {
+  const [macroLive, setMacroLive] = useState({});
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await fetch(`${BACKEND_URL}/api/macro`);
+        const d = await r.json();
+        if (d.success) setMacroLive(d.data);
+      } catch {}
+    };
+    load();
+    const interval = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+  return macroLive;
+}
+
+// ── COMPONENTS ────────────────────────────────────────────────────────────────
 
 function Sparkline({ positive, width = 60, height = 24 }) {
   const pts = useRef(Array.from({ length: 20 }, (_, i) => 0.5 + Math.sin(i * 0.7) * 0.2 + (Math.random() - 0.5) * 0.15));
@@ -129,16 +218,12 @@ function TickerTape({ tickers }) {
 
 async function streamClaude(prompt, systemPrompt, onChunk, onDone) {
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch(`${BACKEND_URL}/api/ai`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, stream: true, system: systemPrompt, messages: [{ role: "user", content: prompt }] }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, systemPrompt }),
     });
+    if (!res.ok) { onChunk(`AI error: ${res.status}`); onDone(); return; }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -154,7 +239,7 @@ async function streamClaude(prompt, systemPrompt, onChunk, onDone) {
       }
     }
     onDone();
-  } catch { onChunk("Unable to connect to AI engine."); onDone(); }
+  } catch { onChunk("Unable to connect to AI engine — is the backend running?"); onDone(); }
 }
 
 function AIAnalysis({ prompt, systemPrompt, autoLoad = true }) {
@@ -182,21 +267,30 @@ function AIAnalysis({ prompt, systemPrompt, autoLoad = true }) {
   );
 }
 
-function DirectionalBias({ tickers }) {
+function DirectionalBias({ tickers, market }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const spy = tickers.find(t => t.sym === "SPY");
   const qqq = tickers.find(t => t.sym === "QQQ");
+  // Use a ref so compute always reads latest market data without re-creating the callback
+  const marketRef = useRef(market);
+  useEffect(() => { marketRef.current = market; }, [market]);
+
   const compute = useCallback(async () => {
     setLoading(true); setResult(null);
+    const liveMarket = marketRef.current;
     let text = "";
     const spyPrice = spy?.price > 0 ? spy.price : 527.43;
-    const spyPct = spy?.pct ?? 0.21;
-    const qqqPct = qqq?.pct ?? -0.21;
+    const spyPct   = spy?.pct ?? 0.21;
+    const qqqPct   = qqq?.pct ?? -0.21;
+    const vixPrice = liveMarket?.vix?.price ?? 25.10;
+    const esPrice  = liveMarket?.es?.price  ?? 6698;
+    const nqPrice  = liveMarket?.nq?.price  ?? 24667;
+    const esPct    = liveMarket?.es?.pct    ?? 0;
+    const nqPct    = liveMarket?.nq?.pct    ?? 0;
+
     await streamClaude(
-      `Quantitative futures strategist. Compute ES directional probability for TODAY based on LIVE data.\nSPY: $${spyPrice} (${spyPct > 0 ? "+" : ""}${spyPct}%), QQQ: (${qqqPct > 0 ? "+" : ""}${qqqPct}%), VIX at 25.10, ES at 6698, NQ at 24667, ES gamma flip at 6650
-, Call Wall: 5350ES Spot: 6698, Net Gamma: +$0.6B, Gamma Flip: 6650, Call Wall: 6800, Put Wall: 6600
-\n10Y: 4.31%, 2Y: 4.69%, DXY: 104.83, Put/Call: 1.42\nISM: 47.8, GDP: 3.2%, CPI: 3.2%\nRespond ONLY with valid JSON no markdown:\n{"bullPct":int,"bearPct":int,"bias":"BUY"|"SELL"|"NEUTRAL","confidence":"HIGH"|"MEDIUM"|"LOW","signal":"string","keyRisk":"string","targets":{"upside1":int,"upside2":int,"downside1":int,"downside2":int},"factors":[{"name":"string","weight":int,"direction":"bull"|"bear"|"neutral"}],"summary":"string"}`,
+      `Quantitative futures strategist. Compute ES directional probability for TODAY based on LIVE data.\nSPY: $${spyPrice} (${spyPct > 0 ? "+" : ""}${spyPct.toFixed(2)}%), QQQ: (${qqqPct > 0 ? "+" : ""}${qqqPct.toFixed(2)}%)\nVIX: ${vixPrice.toFixed(2)}, ES: ${esPrice} (${esPct > 0 ? "+" : ""}${esPct.toFixed(2)}%), NQ: ${nqPrice} (${nqPct > 0 ? "+" : ""}${nqPct.toFixed(2)}%)\nES Spot: ${esPrice}, Net Gamma: +$0.6B, Gamma Flip: 6650, Call Wall: 6800, Put Wall: 6600\n10Y: 4.31%, 2Y: 4.69%, DXY: 104.83, Put/Call: 1.42\nISM: 47.8, GDP: 3.2%, CPI: 3.2%\nRespond ONLY with valid JSON no markdown:\n{"bullPct":int,"bearPct":int,"bias":"BUY"|"SELL"|"NEUTRAL","confidence":"HIGH"|"MEDIUM"|"LOW","signal":"string","keyRisk":"string","targets":{"upside1":int,"upside2":int,"downside1":int,"downside2":int},"factors":[{"name":"string","weight":int,"direction":"bull"|"bear"|"neutral"}],"summary":"string"}`,
       "You are a quantitative analyst. Respond ONLY with valid JSON. No markdown, no backticks.",
       (c) => { text += c; },
       () => {
@@ -206,9 +300,12 @@ function DirectionalBias({ tickers }) {
       }
     );
   }, [spy, qqq]);
+
   useEffect(() => { if (tickers.some(t => t.price > 0)) compute(); }, [tickers]);
+
   const biasColor = result?.bias === "BUY" ? "#00d4aa" : result?.bias === "SELL" ? "#ff4d6d" : "#f6c90e";
   const confColor = result?.confidence === "HIGH" ? "#00d4aa" : result?.confidence === "MEDIUM" ? "#f6c90e" : "#64748b";
+  const esSpot = market?.es?.price ?? 5274;
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -236,8 +333,8 @@ function DirectionalBias({ tickers }) {
               ))}
             </div>
             <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", gap: 4, minWidth: 100 }}>
-              {[{ label: "R2", val: result.targets.upside2, color: "#00d4aa" }, { label: "R1", val: result.targets.upside1, color: "#00d4aa99" }, { label: "SPOT", val: 5274, color: "#f6c90e" }, { label: "S1", val: result.targets.downside1, color: "#ff4d6d99" }, { label: "S2", val: result.targets.downside2, color: "#ff4d6d" }].map(t => (
-                <div key={t.label} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{t.label}</span><span style={{ fontSize: 10, fontWeight: 600, color: t.color, fontFamily: "'IBM Plex Mono', monospace" }}>{t.val.toLocaleString()}</span></div>
+              {[{ label: "R2", val: result.targets.upside2, color: "#00d4aa" }, { label: "R1", val: result.targets.upside1, color: "#00d4aa99" }, { label: "SPOT", val: esSpot, color: "#f6c90e" }, { label: "S1", val: result.targets.downside1, color: "#ff4d6d99" }, { label: "S2", val: result.targets.downside2, color: "#ff4d6d" }].map(t => (
+                <div key={t.label} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{t.label}</span><span style={{ fontSize: 10, fontWeight: 600, color: t.color, fontFamily: "'IBM Plex Mono', monospace" }}>{typeof t.val === "number" ? t.val.toLocaleString() : t.val}</span></div>
               ))}
             </div>
           </div>
@@ -317,38 +414,77 @@ function OptionsChain() {
   );
 }
 
-function EconomicIndicators() {
+function EconomicIndicators({ macroLive = {} }) {
   const [aiOpen, setAiOpen] = useState(false);
+  // Merge static data with live data from backend — live data overrides static
+  const data = ECONOMIC_DATA_STATIC.map(item => {
+    const live = macroLive[item.name];
+    return live ? { ...item, ...live } : item;
+  });
+  const tenY  = data.find(d => d.name === "10Y Treasury");
+  const twoY  = data.find(d => d.name === "2Y Treasury");
+  const ffr   = data.find(d => d.name === "Fed Funds Rate");
+  const macroPrompt = `Fed at ${ffr?.value || "5.25%"}, CPI 3.2%, GDP 3.2%, unemployment 3.7%, 10Y at ${tenY?.value || "4.31%"}, 2Y at ${twoY?.value || "4.69%"}, ISM 47.8. Macro regime, rate cut timing, key equity risks, best sectors?`;
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {ECONOMIC_DATA.map((item, i) => (<div key={i} style={{ display: "flex", alignItems: "center", padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}><span style={{ flex: 1, fontSize: 11, color: "#94a3b8", fontFamily: "'IBM Plex Mono', monospace" }}>{item.name}</span><span style={{ fontSize: 12, fontWeight: 600, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace", minWidth: 80, textAlign: "right" }}>{item.value}</span><span style={{ fontSize: 10, marginLeft: 8, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace", minWidth: 40, textAlign: "right" }}>{item.prev}</span><span style={{ marginLeft: 10, fontSize: 13, color: item.trend === "up" ? "#ff4d6d" : item.trend === "down" ? "#00d4aa" : "#64748b" }}>{item.trend === "up" ? "↑" : item.trend === "down" ? "↓" : "→"}</span><span style={{ marginLeft: 10, fontSize: 9, color: "#4a9eff", fontFamily: "'IBM Plex Mono', monospace", minWidth: 36, textAlign: "right" }}>{item.next}</span></div>))}
+        {data.map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", padding: "7px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <span style={{ flex: 1, fontSize: 11, color: "#94a3b8", fontFamily: "'IBM Plex Mono', monospace" }}>{item.name}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: item.live ? "#00d4aa" : "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace", minWidth: 80, textAlign: "right" }}>{item.value}</span>
+            <span style={{ fontSize: 10, marginLeft: 8, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace", minWidth: 40, textAlign: "right" }}>{item.prev}</span>
+            <span style={{ marginLeft: 10, fontSize: 13, color: item.trend === "up" ? "#ff4d6d" : item.trend === "down" ? "#00d4aa" : "#64748b" }}>{item.trend === "up" ? "↑" : item.trend === "down" ? "↓" : "→"}</span>
+            <span style={{ marginLeft: 10, fontSize: 9, color: item.live ? "#00d4aa" : "#4a9eff", fontFamily: "'IBM Plex Mono', monospace", minWidth: 36, textAlign: "right" }}>{item.live ? "LIVE" : item.next}</span>
+          </div>
+        ))}
       </div>
       <button onClick={() => setAiOpen(!aiOpen)} style={{ marginTop: 8, fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}>{aiOpen ? "▲ HIDE MACRO OUTLOOK" : "▼ AI MACRO OUTLOOK"}</button>
-      {aiOpen && <div style={{ marginTop: 8, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160 }}><AIAnalysis prompt="Fed at 5.25-5.50%, CPI 3.2%, GDP 3.2%, unemployment 3.7%, 10Y at 4.31%, ISM 47.8. Macro regime, rate cut timing, key equity risks, best sectors?" /></div>}
+      {aiOpen && <div style={{ marginTop: 8, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160 }}><AIAnalysis prompt={macroPrompt} /></div>}
     </div>
   );
 }
 
-function NewsFeed() {
+function NewsFeed({ newsItems = NEWS_FALLBACK, newsStatus = "static" }) {
   const [selected, setSelected] = useState(null);
   const impactColor = { high: "#ff4d6d", medium: "#f6c90e", low: "#64748b" };
   const tagColor = { MACRO: "#4a9eff", OPTIONS: "#a78bfa", RATES: "#f6c90e", EQUITY: "#00d4aa", CMDTY: "#fb923c", INTL: "#60a5fa", TECH: "#34d399" };
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {newsStatus === "error" && (
+        <div style={{ padding: "4px 8px", marginBottom: 4, background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.2)", borderRadius: 4, fontSize: 9, color: "#ff4d6d", fontFamily: "'IBM Plex Mono', monospace" }}>
+          ⚠ Backend offline — showing cached headlines
+        </div>
+      )}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {NEWS_ITEMS.map((item, i) => (<div key={i} onClick={() => setSelected(item)} style={{ padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer", background: selected?.headline === item.headline ? "rgba(74,158,255,0.07)" : "transparent" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"} onMouseLeave={e => e.currentTarget.style.background = selected?.headline === item.headline ? "rgba(74,158,255,0.07)" : "transparent"}><div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}><span style={{ fontSize: 9, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{item.time}</span><span style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>{item.source}</span><span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, color: tagColor[item.tag] || "#a0aec0", border: `1px solid ${tagColor[item.tag] || "#a0aec0"}33`, fontFamily: "'IBM Plex Mono', monospace" }}>{item.tag}</span><span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: impactColor[item.impact], flexShrink: 0 }} /></div><div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.4 }}>{item.headline}</div></div>))}
+        {newsItems.map((item, i) => (
+          <div key={i} onClick={() => setSelected(item)} style={{ padding: "8px 6px", borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer", background: selected?.headline === item.headline ? "rgba(74,158,255,0.07)" : "transparent" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"} onMouseLeave={e => e.currentTarget.style.background = selected?.headline === item.headline ? "rgba(74,158,255,0.07)" : "transparent"}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+              <span style={{ fontSize: 9, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{item.time}</span>
+              <span style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>{item.source}</span>
+              <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, color: tagColor[item.tag] || "#a0aec0", border: `1px solid ${tagColor[item.tag] || "#a0aec0"}33`, fontFamily: "'IBM Plex Mono', monospace" }}>{item.tag}</span>
+              <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: impactColor[item.impact], flexShrink: 0 }} />
+            </div>
+            <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.4 }}>{item.headline}</div>
+          </div>
+        ))}
       </div>
-      {selected ? <div style={{ borderTop: "1px solid rgba(74,158,255,0.2)", background: "rgba(0,0,0,0.4)", padding: 12, height: 160, flexShrink: 0 }}><AIAnalysis key={selected.headline} prompt={`Analyze for day trader: "${selected.headline}". Trading implications, affected instruments, bullish/bearish, options play?`} /></div>
+      {selected
+        ? <div style={{ borderTop: "1px solid rgba(74,158,255,0.2)", background: "rgba(0,0,0,0.4)", padding: 12, height: 160, flexShrink: 0 }}><AIAnalysis key={selected.headline} prompt={`Analyze for day trader: "${selected.headline}". Trading implications, affected instruments, bullish/bearish, options play?`} /></div>
         : <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "10px 6px", color: "#334155", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", textAlign: "center" }}>↑ Click any headline for AI analysis</div>}
     </div>
   );
 }
 
-function MarketCards({ tickers, status, lastUpdated, refresh }) {
+function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStatus }) {
+  const futuresItems = [
+    { sym: "VIX",  name: "CBOE Volatility",    data: market?.vix, color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
+    { sym: "ES",   name: "E-mini S&P 500",      data: market?.es,  color: "#4a9eff",  accentBg: "rgba(74,158,255,0.06)",  accentBorder: "rgba(74,158,255,0.2)"  },
+    { sym: "NQ",   name: "E-mini Nasdaq 100",   data: market?.nq,  color: "#a78bfa",  accentBg: "rgba(167,139,250,0.06)", accentBorder: "rgba(167,139,250,0.2)" },
+  ];
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 4 }}>
+      {/* ETF row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 8 }}>
         {tickers.map((t) => (
           <div key={t.sym} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "10px 12px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
@@ -362,9 +498,33 @@ function MarketCards({ tickers, status, lastUpdated, refresh }) {
           </div>
         ))}
       </div>
+      {/* Futures & VIX row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 4 }}>
+        {futuresItems.map(({ sym, name, data, color, accentBg, accentBorder }) => (
+          <div key={sym} style={{ background: accentBg, border: `1px solid ${accentBorder}`, borderRadius: 6, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'IBM Plex Mono', monospace" }}>{sym}</span>
+                {marketStatus === "live" && <span style={{ fontSize: 8, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace" }}>● LIVE</span>}
+              </div>
+              <div style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{name}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", fontFamily: "'IBM Plex Mono', monospace" }}>
+                {data?.price != null ? data.price.toFixed(sym === "VIX" ? 2 : 0) : "—"}
+              </div>
+              {data && (
+                <div style={{ fontSize: 10, color: data.chg >= 0 ? "#00d4aa" : "#ff4d6d", fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {data.chg >= 0 ? "+" : ""}{data.pct.toFixed(2)}%
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <span style={{ fontSize: 9, color: status === "live" ? "#00d4aa" : status === "error" ? "#ff4d6d" : "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>
-          {status === "live" ? `● LIVE · Updated ${lastUpdated?.toLocaleTimeString()}` : status === "error" ? "● DATA ERROR — Check API key" : "● Loading…"}
+          {status === "live" ? `● LIVE · Updated ${lastUpdated?.toLocaleTimeString()}` : status === "error" ? "● ETF DATA ERROR" : "● Loading…"}
         </span>
         <button onClick={refresh} style={{ fontSize: 9, color: "#4a9eff", background: "none", border: "1px solid rgba(74,158,255,0.2)", borderRadius: 3, padding: "2px 8px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>↻ REFRESH</button>
       </div>
@@ -402,6 +562,10 @@ function Clock() {
 
 export default function Terminal() {
   const { tickers, lastUpdated, status, refresh } = useLivePrices();
+  const { news, newsStatus }                       = useLiveNews();
+  const { market, marketStatus }                   = useLiveMarket();
+  const macroLive                                  = useLiveMacro();
+
   return (
     <div style={{ minHeight: "100vh", background: "#060a14", backgroundImage: "radial-gradient(ellipse at 20% 20%, rgba(74,158,255,0.04) 0%, transparent 50%), radial-gradient(ellipse at 80% 80%, rgba(0,212,170,0.03) 0%, transparent 50%)", color: "#e2e8f0", fontFamily: "'DM Sans', sans-serif", display: "flex", flexDirection: "column" }}>
       <style>{`
@@ -431,14 +595,20 @@ export default function Terminal() {
       </div>
       <TickerTape tickers={tickers} />
       <div className="terminal-root" style={{ flex: 1, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-        <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} />
+        <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1fr", gap: 12, height: 520 }}>
-          <Panel title="News Feed" badge={`${NEWS_ITEMS.length} stories`}><NewsFeed /></Panel>
+          <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`}>
+            <NewsFeed newsItems={news} newsStatus={newsStatus} />
+          </Panel>
           <Panel title="Options Chain" badge="SPY · Live"><OptionsChain /></Panel>
-          <Panel title="Economic Indicators" badge="Live"><EconomicIndicators /></Panel>
+          <Panel title="Economic Indicators" badge={Object.keys(macroLive).length > 0 ? "LIVE" : "Static"}>
+            <EconomicIndicators macroLive={macroLive} />
+          </Panel>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, height: 480 }}>
-          <Panel title="ES Futures — Directional Probability" badge="AI MODEL · LIVE"><DirectionalBias tickers={tickers} /></Panel>
+          <Panel title="ES Futures — Directional Probability" badge="AI MODEL · LIVE">
+            <DirectionalBias tickers={tickers} market={market} />
+          </Panel>
           <Panel title="Gamma Exposure Levels" badge="ES · NQ"><GammaLevels /></Panel>
         </div>
         <Panel title="AI Market Strategist · Live Briefing" badge="POWERED BY CLAUDE" style={{ height: 180 }}>
@@ -446,7 +616,7 @@ export default function Terminal() {
         </Panel>
       </div>
       <div style={{ padding: "6px 20px", borderTop: "1px solid rgba(255,255,255,0.05)", display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1e293b", fontFamily: "'IBM Plex Mono', monospace" }}>
-        <span>AXIOM TERMINAL v3.0.0 · FOR INFORMATIONAL PURPOSES ONLY · NOT FINANCIAL ADVICE</span>
+        <span>AXIOM TERMINAL v3.1.0 · FOR INFORMATIONAL PURPOSES ONLY · NOT FINANCIAL ADVICE</span>
         <span>POWERED BY CLAUDE AI · ANTHROPIC</span>
       </div>
     </div>
