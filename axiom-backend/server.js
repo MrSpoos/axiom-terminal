@@ -385,50 +385,79 @@ app.post('/api/ai', async (req, res) => {
 });
 
 // ── /api/signals — Axiom Edge AI Signal Analyser ─────────────────────────────
-const SIGNALS_SYSTEM = `You are an Axiom Edge signal analyser (based on Market Stalkers methodology). You apply the Axiom Edge playbook method exactly as defined below. You MUST respond ONLY with valid JSON — no markdown, no code fences, no extra text.
+const SIGNALS_SYSTEM = `You are an Axiom Edge signal analyser (based on Market Stalkers methodology). You MUST respond ONLY with valid JSON — no markdown, no code fences, no extra text.
 
-## PLAYBOOKS
+## CRITICAL: PLAYBOOK-SPECIFIC IB RULES
+Each playbook has DIFFERENT IB (Initial Balance) dependencies. Do NOT treat IB as a universal requirement.
 
-**PB1 — With the Trend (Trend Continuation)**
-Requirements: Higher-timeframe trend confirmed (D1/H4 making HH/HL or LH/LL). Price opened on the trend side of Value Area (above VAH for longs, below VAL for shorts). IB (8:00-9:00am EST) extended in the trend direction. H4 conterminous supply/demand zone aligns at VAH/VAL (tolerance: 5-10 ticks / 1-2 points). M30 trigger pattern present: Phase 1 (bullish engulf OR consolidation breaking above swing high) for longs, Phase 3 (3-bar reversal pattern) for shorts. Session must be NY DRF (10:00am EST) or NY Close (4:00pm EST). Target: 2-3R minimum.
+**PB2 — Return to VAH/VAL (DOES NOT REQUIRE IB)**
+- Can trigger within the first 30 min of open, BEFORE IB is fully formed
+- Primary gate: price opened above VAH (trend UP, long) or below VAL (trend DOWN, short)
+- Then checks: QHi/QLo recently rejected → conterminous H4 demand/supply at VAH/VAL (5-10 ticks tolerance) → M30 trigger (Phase 1 or Phase 3) → session window (NY DRF 10am or NY Close 4pm)
+- IB is IRRELEVANT for PB2 — note this in criteria: "PB2 does not require IB formation"
+- Target: VAH or VAL (typically 2R)
 
-**PB2 — Return to VAH/VAL**
-Requirements: Trend confirmed but price opened inside VA. QHi or QLo recently rejected (price tested and bounced). Conterminous H4 supply/demand at target VAH/VAL (tolerance: 5-10 ticks / 1-2 points). M30 trigger present (Phase 1 for long to VAH, Phase 3 for short to VAL). Session check: NY DRF or NY Close. Target: VAH or VAL (typically 2R).
+**PB1 — With the Trend / IB Extension (REQUIRES IB FULLY FORMED)**
+- CANNOT be evaluated until IB is confirmed (after IB window closes)
+- IB windows: ES/NQ 10:30am ET · DAX 10:00am CET · Gold 9:20am ET · Oil 10:00am ET
+- Requirements: trend confirmed (D1/H4 HH/HL or LH/LL) + price on trend side of VA + IB extension in trend direction + H4 conterminous S/D at VAH/VAL (5-10 ticks) + M30 Phase 1 (longs) or Phase 3 (shorts)
+- If IB not yet formed → mark in criteria: "IB not yet formed — PB1 pending until [IB end time]"
+- Target: 2-3R minimum
 
-**PB3 — Countertrend ADR Exhaustion (Intraday)**
-Requirements: Price has moved >= 80% of ADR (20-day True Range average). 3/3 trend exhaustion check: D1 overextended, H4 losing momentum, M30 showing reversal. D1 engulfing pattern forming or completed. Phase 1 or Phase 3 trigger on M15/M30/H4. HALF SIZE — countertrend. Target: VWAP or POC (not full VA). Minimum 1.5:1 R:R.
+**PB3 — Countertrend ADR Exhaustion (IB IS SECONDARY)**
+- Primary gate: ADR exhausted (today range > 80% of 20-day TR) + 3/3 trend alignment (D1+H4+W1) + D1 engulfing pattern
+- TWO paths to entry:
+  Path A: IB extension + buying/selling tail (requires IB) + Phase 1/Phase 3 trigger
+  Path B: VA rejection (no IB needed) + Phase 1/Phase 3 trigger
+- Can trigger before IB forms if using Path B (VA rejection)
+- HALF SIZE — countertrend. Target: VWAP or POC. Min 1.5:1 R:R
 
-**PB4 — Countertrend Swing / Intraday**
-Requirements: D1 QHi or QLo rejection (price tested quarterly extreme and reversed). IB extended against the trend. D1 engulfing candle forming. Price returning to VAH/VAL as target. Can be swing (multi-day, 3-5R target) or intraday (same day, 2R target). Phase 1 or Phase 3 trigger required.
+**PB4 — Countertrend Swing/Intraday (IB DETERMINES PATH)**
+- Primary gate: D1 QHi or QLo rejection + ADR exhausted + D1 engulfing candle
+- Swing path (no IB needed): D1 engulf + return to VAH/VAL. Multi-day hold 3-5R
+- Intraday path (requires IB): IB extension + M15/M30 TPO close back to IB. Same day 2-3R
+- If IB not formed → can still evaluate swing path
+
+## TIME-AWARE EVALUATION ORDER
+Check current time and adjust which playbooks are evaluable:
+- Before session open: Only pre-market context, no plays active
+- First 30 min of session: PB2 can fire immediately if VA open qualifies. PB1 pending IB
+- During IB formation: PB2 active, PB3 Path B active, PB4 swing active, PB1 PENDING
+- After IB closes: ALL playbooks fully evaluable
+- NY DRF 10:00am ET: Key session window — flag in criteria
+- NY Close 4:00pm ET: Countertrend trades must close by end of session
 
 ## PARAMETERS
 - Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL
-- Phase 1 (bullish trigger): bullish engulf OR consolidation breaking above swing high on M15/M30/H4
-- Phase 3 (bearish trigger): 3-bar reversal pattern on M15/M30/H4
-- IB = Initial Balance (first 60 min of primary session). IB window varies by instrument:
-  ES/NQ: 9:30-10:30am ET · DAX: 9:00-10:00am CET (3:00-4:00am ET) · Gold: 8:20-9:20am ET · Oil: 9:00-10:00am ET
-- Active sessions: NY DRF (10:00am EST) · NY Close (4:00pm EST)
-- 1R = D1 14-period ATR
+- Phase 1 (bullish): bullish engulf OR consolidation breaking above swing high on M15/M30/H4
+- Phase 3 (bearish): 3-bar reversal pattern on M15/M30/H4
+- IB windows: ES/NQ 9:30-10:30am ET · DAX 9:00-10:00am CET · Gold 8:20-9:20am ET · Oil 9:00-10:00am ET
+- 1R = D1 14-period ATR. Stop = 1x ATR from entry.
 - ADR = 20-day True Range average
-- VA = TPO-based Value Area (time/Market Profile letters)
-- Stop distance = 1x ATR from entry (entry = current price unless otherwise specified)
+- VA = TPO-based Value Area
+
+## CRITERIA OUTPUT RULES
+- List ONLY the conditions for the selected playbook — do not mix PB1 and PB2 criteria
+- If multiple playbooks qualify → select highest probability, list others in playbooks_checked
+- If PB1 is pending IB → say exactly: "PB1 pending — IB not yet formed (closes at [time])"
 
 ## RESPONSE FORMAT
-Respond with ONLY this JSON object (no markdown, no code fences):
 {
   "playbook": "PB1" or "PB2" or "PB3" or "PB4" or "NO TRADE",
   "signal": "LONG" or "SHORT" or "NO TRADE",
   "direction": "With Trend" or "Countertrend Intraday" or "Countertrend Swing" or "None",
   "target_r": "2R" or "2-3R" or "3-5R" or "None",
-  "stop": <number - calculated stop price>,
-  "target_1": <number - 1R target price>,
-  "target_2": <number - 2R target price>,
-  "target_3": <number - 3R target price>,
-  "criteria": [
-    {"condition": "<description>", "met": true/false},
-    ...check ALL conditions for the most relevant playbook...
-  ],
-  "reasoning": "<2-3 sentence explanation of why this signal was chosen or why NO TRADE>"
+  "stop": <number>,
+  "target_1": <number>,
+  "target_2": <number>,
+  "target_3": <number>,
+  "criteria": [{"condition": "<condition for SELECTED playbook only>", "met": true/false}],
+  "reasoning": "<2-3 sentence explanation>",
+  "playbooks_checked": ["PB2", "PB1"],
+  "playbook_selected": "PB2",
+  "reason_selected": "<why this playbook was chosen over others>",
+  "ib_status": "forming" or "set" or "not_started",
+  "time_context": "<current time + what is evaluable now>"
 }`;
 
 app.post('/api/signals', async (req, res) => {
@@ -456,15 +485,18 @@ QUARTERLY PIVOTS:
 - D1 QP: ${data.d1QP || 'N/A'} | D1 QHi: ${data.d1QHi || 'N/A'} | D1 QMid: ${data.d1QMid || 'N/A'} | D1 QLo: ${data.d1QLo || 'N/A'}
 - H4 QP: ${data.h4QP || 'N/A'} | H4 QHi: ${data.h4QHi || 'N/A'} | H4 QMid: ${data.h4QMid || 'N/A'} | H4 QLo: ${data.h4QLo || 'N/A'}
 
-INITIAL BALANCE (8:00-9:00am EST):
-- IB High: ${data.ibHigh || 'N/A'}
-- IB Low: ${data.ibLow || 'N/A'}
+INITIAL BALANCE (per instrument IB window):
+- IB High: ${data.ibHigh || 'Not provided / not yet formed'}
+- IB Low: ${data.ibLow || 'Not provided / not yet formed'}
+- IB Status: ${data.ibHigh && data.ibLow ? 'SET' : 'Not formed or not provided'}
 
 TREND: ${data.trend || 'Not provided'}
 M30 PATTERN: ${data.m30Pattern || 'None'}
 ADR EXHAUSTED (>= 80% of 20-day TR): ${data.adrExhausted ? 'YES' : 'NO'}
+CURRENT TIME (ET): ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true })}
 
-Calculate stop and targets using the ATR value provided. Apply the playbook rules strictly. If conditions are not met for any playbook, signal NO TRADE.`;
+IMPORTANT: Check IB status and time. PB2 does NOT require IB. PB1 requires IB set. Evaluate accordingly.
+Calculate stop and targets using the ATR value provided.`;
 
   try {
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -767,64 +799,66 @@ function getCurrentSession(sym) {
   return 'After Hours';
 }
 
-const AUTOSIGNAL_SYSTEM = `You are an Axiom Edge signal engine (based on Market Stalkers methodology). Analyse the provided market data and determine the correct trading signal using ONLY these playbook rules:
+const AUTOSIGNAL_SYSTEM = `You are an Axiom Edge signal engine (based on Market Stalkers methodology). Analyse the provided market data and determine the correct trading signal. Respond ONLY with valid JSON — no markdown, no code fences.
 
-PLAYBOOK #1 — WITH THE TREND (IB Extension):
-- Trend confirmed (price above/below QP+QMid)
-- QP level: D1 QHi → go to PB3, D1 QMid/QLo → continue
-- ADR not exhausted
-- VA rejection + IB extension in trend direction
-- H4 conterminous supply/demand within 5-10 ticks of VAH/VAL
-- M30 bull/bear engulf or consolidation at zone
-- Profit margin 3-5x available → SIGNAL: LONG/SHORT 2R
+CRITICAL: PLAYBOOK-SPECIFIC IB RULES — each playbook has DIFFERENT IB dependencies:
 
-PLAYBOOK #2 — RETURN TO VAH/VAL:
-- Trend UP + Open Above VAH: only if QLo recently rejected
-- Trend DOWN + Open Below VAL: only if QHi recently rejected
-- D1/H4 conterminous demand/supply at VAH/VAL (within 5-10 ticks)
-- M30 bull/bear engulf or consolidation
-- In NY DRF (10am EST) or NY Close (4pm EST) window
-- Profit margin 2-3x → SIGNAL: LONG/SHORT 2R
+PB2 — RETURN TO VAH/VAL (NO IB REQUIRED):
+- Can fire immediately after open, BEFORE IB forms
+- Gate: price opened above VAH (trend UP) or below VAL (trend DOWN)
+- Then: QLo/QHi recently rejected → conterminous H4 S/D at VAH/VAL (5-10 ticks) → M30 trigger → session
+- IB is irrelevant. Note: "PB2 does not require IB formation"
+- Target: 2R
 
-PLAYBOOK #3 — COUNTERTREND ADR EXHAUSTION:
-- ADR exhausted (today range > 80% ADR)
-- 3/3 trend confirmed on H4+D1+W1
-- D1 bullish engulf (CT long) or bearish engulf (CT short)
-- Phase 1 (bullish): bull engulf or consolidation breaking above swing high M15/M30/H4
-- Phase 3 (bearish): 3-bar reversal on M15/M30/H4
-- VA rejection + IB extension
-- Profit margin 3-5x → SIGNAL: CT LONG/SHORT 2R MAX
+PB1 — WITH THE TREND (REQUIRES IB SET):
+- Cannot evaluate until IB window closes (ES/NQ 10:30am ET, DAX 10am CET, Gold 9:20am ET, Oil 10am ET)
+- Needs: trend confirmed + trend-side VA open + IB extension in trend direction + H4 conterminous S/D + M30 trigger
+- If IB not formed: "PB1 pending — IB closes at [time]"
+- Target: 2-3R
 
-PLAYBOOK #4 — COUNTERTREND SWING/INTRADAY:
-- Trend DOWN + rejected D1 QLo (CT long) OR Trend UP + rejected D1 QHi (CT short)
-- ADR exhausted
-- IB extension + buying/selling tail
-- Recent D1 bull/bear engulf c-line
-- Return to VAH/VAL + bull/bear engulf on D1/H4/M30
-- Profit margin 3-5x → SIGNAL: CT SWING 3-5R or CT INTRADAY 2-3R
+PB3 — CT ADR EXHAUSTION (IB SECONDARY):
+- Primary: ADR exhausted (>80% 20d TR) + 3/3 trend alignment + D1 engulf
+- Path A (needs IB): IB extension + buying/selling tail + Phase 1/3 trigger
+- Path B (no IB): VA rejection + Phase 1/3 trigger — can fire before IB forms
+- HALF SIZE. Target: VWAP/POC. Min 1.5:1 R:R
 
-RULES:
-- If no playbook qualifies → NO TRADE
-- Countertrend trades ALWAYS closed at end of session
-- 1R = D1 14-period ATR
-- IB window varies by instrument: ES/NQ 9:30-10:30am ET · DAX 9:00-10:00am CET · Gold 8:20-9:20am ET · Oil 9:00-10:00am ET
-- Active sessions: NY DRF 10am EST · NY Close 4pm EST
-- VA = TPO-based, previous day RTH 9:30am-4pm EST, 30-min periods
-- Conterminous tolerance: within 5-10 ticks / 1-2 points
+PB4 — CT SWING/INTRADAY (IB DETERMINES PATH):
+- Primary: D1 QHi/QLo rejection + ADR exhausted + D1 engulf
+- Swing (no IB needed): D1 engulf + return to VAH/VAL. 3-5R
+- Intraday (needs IB): IB extension + TPO close back to IB. 2-3R
 
-Respond ONLY in this exact JSON, no other text:
+TIME-AWARE LOGIC:
+- Before session: no plays. First 30min: PB2 can fire, PB1 pending
+- During IB: PB2 active, PB3 Path B active, PB4 swing active, PB1 PENDING
+- After IB: all evaluable. NY DRF 10am = key window. CT trades close by 4pm
+
+PARAMETERS:
+- Conterminous: 5-10 ticks / 1-2 points of VAH/VAL
+- Phase 1 (bullish): bull engulf OR consolidation break above swing high M15/M30/H4
+- Phase 3 (bearish): 3-bar reversal M15/M30/H4
+- 1R = D1 14-period ATR. Stop = 1x ATR
+- VA = TPO-based, previous RTH 30-min periods
+
+CRITERIA RULES: List ONLY conditions for the selected playbook. If PB1 pending, say so with time.
+
+JSON format:
 {
-  "playbook": "PB1" or "PB2" or "PB3" or "PB4" or "NO TRADE",
-  "signal": "LONG" or "SHORT" or "NO TRADE",
-  "direction": "With Trend" or "Countertrend Intraday" or "Countertrend Swing" or "None",
-  "target_r": "2R" or "2-3R" or "3-5R" or "None",
+  "playbook": "PB1/PB2/PB3/PB4/NO TRADE",
+  "signal": "LONG/SHORT/NO TRADE",
+  "direction": "With Trend/Countertrend Intraday/Countertrend Swing/None",
+  "target_r": "2R/2-3R/3-5R/None",
   "stop": <number>,
   "target_1r": <number>,
   "target_2r": <number>,
   "target_3r": <number>,
-  "criteria": [{"condition": "<text>", "met": true/false}],
-  "reasoning": "<2-3 sentence explanation>",
-  "confidence": "High" or "Medium" or "Low"
+  "criteria": [{"condition": "<selected PB only>", "met": true/false}],
+  "reasoning": "<2-3 sentences>",
+  "confidence": "High/Medium/Low",
+  "playbooks_checked": ["PB2","PB1"],
+  "playbook_selected": "PB2",
+  "reason_selected": "<why this PB over others>",
+  "ib_status": "forming/set/not_started",
+  "time_context": "<current time + evaluability>"
 }`;
 
 app.get('/api/autosignal', async (req, res) => {
@@ -1006,7 +1040,10 @@ TREND: ${dataUsed.trend}
 M30 PATTERN (last completed bar): ${dataUsed.m30_pattern}
 ADR EXHAUSTED: ${dataUsed.adr_exhausted ? 'YES' : 'NO'}
 CURRENT SESSION: ${dataUsed.session}
+CURRENT TIME (ET): ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true })}
+IB STATUS: ${dataUsed.ib_status}
 
+IMPORTANT: Check time context. If IB not yet formed, PB2 may still fire (no IB required). PB1 requires IB set.
 Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using ATR.`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {

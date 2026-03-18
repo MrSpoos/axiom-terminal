@@ -685,7 +685,30 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
             <div style={{ fontSize: 9, fontWeight: 600, color: "#94a3b8", fontFamily: MONO, letterSpacing: "0.08em" }}>
               {PLAYBOOK_NAMES[result.playbook] || result.playbook}
             </div>
+            {result.reason_selected && (
+              <div style={{ fontSize: 8, color: "#64748b", fontFamily: MONO, marginTop: 4 }}>{result.reason_selected}</div>
+            )}
           </div>
+
+          {/* Time context + IB status */}
+          {(result.time_context || result.ib_status) && (
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 8 }}>
+              {result.ib_status && (
+                <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                  color: result.ib_status === "set" ? "#00d4aa" : result.ib_status === "forming" ? "#f6c90e" : "#475569",
+                  background: (result.ib_status === "set" ? "#00d4aa" : result.ib_status === "forming" ? "#f6c90e" : "#475569") + "15",
+                  fontWeight: 700 }}>IB {result.ib_status.toUpperCase()}</span>
+              )}
+              {result.time_context && (
+                <span style={{ fontSize: 7, fontFamily: MONO, color: "#475569", padding: "2px 6px", background: "rgba(255,255,255,0.04)", borderRadius: 3 }}>{result.time_context}</span>
+              )}
+              {result.playbooks_checked && (
+                <span style={{ fontSize: 7, fontFamily: MONO, color: "#334155", padding: "2px 6px", background: "rgba(255,255,255,0.03)", borderRadius: 3 }}>
+                  Checked: {result.playbooks_checked.join(", ")}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* R target prices */}
           {result.stop && (
@@ -700,7 +723,7 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
           {/* Criteria checklist */}
           {result.criteria && result.criteria.length > 0 && (
             <div style={{ marginBottom: 10, background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: 8 }}>
-              <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>CRITERIA CHECK</div>
+              <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>CRITERIA CHECK — {result.playbook_selected || result.playbook}</div>
               {result.criteria.map((c, i) => (
                 <div key={i} style={{
                   display: "flex", alignItems: "center", gap: 6, fontSize: 9, fontFamily: MONO,
