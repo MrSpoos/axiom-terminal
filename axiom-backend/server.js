@@ -384,8 +384,8 @@ app.post('/api/ai', async (req, res) => {
   }
 });
 
-// ── /api/signals — Market Stalkers AI Signal Analyser ─────────────────────────
-const SIGNALS_SYSTEM = `You are a Market Stalkers signal analyser. You apply the Market Stalkers playbook method exactly as defined below. You MUST respond ONLY with valid JSON — no markdown, no code fences, no extra text.
+// ── /api/signals — Axiom Edge AI Signal Analyser ─────────────────────────────
+const SIGNALS_SYSTEM = `You are an Axiom Edge signal analyser (based on Market Stalkers methodology). You apply the Axiom Edge playbook method exactly as defined below. You MUST respond ONLY with valid JSON — no markdown, no code fences, no extra text.
 
 ## PLAYBOOKS
 
@@ -441,7 +441,7 @@ app.post('/api/signals', async (req, res) => {
     return res.status(400).json({ error: 'instrument and currentPrice are required' });
   }
 
-  const userPrompt = `Analyse this market setup and determine the correct Market Stalkers playbook signal:
+  const userPrompt = `Analyse this market setup and determine the correct Axiom Edge playbook signal:
 
 INSTRUMENT: ${data.instrument}
 CURRENT PRICE: ${data.currentPrice}
@@ -508,7 +508,7 @@ Calculate stop and targets using the ATR value provided. Apply the playbook rule
   }
 });
 
-// ── /api/autosignal — Fully Automated Market Stalkers Signal Engine ──────────
+// ── /api/autosignal — Fully Automated Axiom Edge Signal Engine ───────────────
 const AUTO_SYMBOL_MAP = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
 const TICK_SIZE = { ES: 0.25, NQ: 0.25, DAX: 0.5, XAU: 0.10, OIL: 0.01 };
 
@@ -645,7 +645,7 @@ function getCurrentSession(sym) {
   return 'After Hours';
 }
 
-const AUTOSIGNAL_SYSTEM = `You are a Market Stalkers Method signal engine. Analyse the provided market data and determine the correct trading signal using ONLY these playbook rules:
+const AUTOSIGNAL_SYSTEM = `You are an Axiom Edge signal engine (based on Market Stalkers methodology). Analyse the provided market data and determine the correct trading signal using ONLY these playbook rules:
 
 PLAYBOOK #1 — WITH THE TREND (IB Extension):
 - Trend confirmed (price above/below QP+QMid)
@@ -857,7 +857,7 @@ app.get('/api/autosignal', async (req, res) => {
     };
 
     // ── Call Claude ──
-    const userPrompt = `Analyse this LIVE market data for ${sym} and determine the correct Market Stalkers playbook signal:
+    const userPrompt = `Analyse this LIVE market data for ${sym} and determine the correct Axiom Edge playbook signal:
 
 INSTRUMENT: ${sym}
 CURRENT PRICE: ${dataUsed.current_price}
@@ -944,8 +944,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/market  — VIX, ES Futures, NQ Futures (Yahoo Finance)`);
   console.log(`   /api/macro   — 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
   console.log(`   /api/ai      — Claude streaming proxy (key: ${ANTHROPIC_KEY ? '✓ set' : '✗ MISSING'})`);
-  console.log(`   /api/signals — Market Stalkers AI Signal Analyser`);
-  console.log(`   /api/autosignal — Fully Automated Signal Engine (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
+  console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
   if (!FRED_KEY) {
     console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);

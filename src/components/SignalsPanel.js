@@ -1125,10 +1125,10 @@ export default function SignalsPanel() {
       {/* Header */}
       <div style={{ textAlign: "center", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.14em", color: "#4a9eff", fontFamily: MONO }}>
-          MARKET STALKERS \u2014 SIGNALS PANEL
+          AXIOM EDGE
         </div>
         <div style={{ fontSize: 9, color: "#475569", fontFamily: MONO, marginTop: 2 }}>
-          Full decision engine \u00b7 PB1 \u00b7 PB2 \u00b7 PB3 \u00b7 PB4
+          Intelligent signals engine \u00b7 PB1 \u00b7 PB2 \u00b7 PB3 \u00b7 PB4
         </div>
       </div>
 

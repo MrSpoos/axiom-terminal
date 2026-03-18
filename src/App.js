@@ -628,16 +628,16 @@ export default function Terminal() {
           </div>
           <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
           <nav style={{ display: "flex", gap: 2 }}>
-            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","MS SIGNALS"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
+            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
           </nav>
         </div>
         <Clock />
       </div>
       <TickerTape tickers={tickers} />
       <div className="terminal-root" style={{ flex: 1, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-        {activeTab === "MS SIGNALS" ? (
+        {activeTab === "AXIOM EDGE" ? (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
-            <Panel title="Signals Engine" badge="PB1 · PB2 · PB3 · PB4" style={{ minHeight: 600 }}>
+            <Panel title="Axiom Edge" badge="PB1 · PB2 · PB3 · PB4" style={{ minHeight: 600 }}>
               <SignalsPanel />
             </Panel>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
