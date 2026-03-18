@@ -8,20 +8,21 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const FRED_KEY = process.env.FRED_API_KEY;
 
-app.use(cors({
-  origin: (origin, cb) => {
-    // Allow requests with no origin (curl, Postman, Railway health checks)
-    if (!origin) return cb(null, true);
-    // Allow any Vercel deployment, localhost on any port
-    if (/\.vercel\.app$/.test(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin)) {
-      return cb(null, true);
-    }
-    cb(new Error(`CORS: ${origin} not allowed`));
-  },
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type'],
-  credentials: false,
-}));
+// ── HEALTH ROUTES (before any middleware) ─────────────────────────────────────
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'axiom-backend' });
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    ts: new Date().toISOString(),
+    fredEnabled: !!FRED_KEY,
+    aiEnabled: !!process.env.ANTHROPIC_KEY,
+  });
+});
+
+app.use(cors());
 app.use(express.json());
 
 const rss = new RSSParser({
@@ -316,20 +317,6 @@ app.post('/api/ai', async (req, res) => {
     if (!res.headersSent) res.status(500).json({ error: err.message });
     else res.end();
   }
-});
-
-// ── HEALTH CHECK ──────────────────────────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'axiom-backend' });
-});
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    ts: new Date().toISOString(),
-    fredEnabled: !!FRED_KEY,
-    aiEnabled: !!ANTHROPIC_KEY,
-  });
 });
 
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
