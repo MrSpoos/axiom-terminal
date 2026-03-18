@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import SignalsPanel from "./components/SignalsPanel";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
@@ -565,6 +566,7 @@ export default function Terminal() {
   const { news, newsStatus }                       = useLiveNews();
   const { market, marketStatus }                   = useLiveMarket();
   const macroLive                                  = useLiveMacro();
+  const [activeTab, setActiveTab] = useState("MARKETS");
 
   return (
     <div style={{ minHeight: "100vh", background: "#060a14", backgroundImage: "radial-gradient(ellipse at 20% 20%, rgba(74,158,255,0.04) 0%, transparent 50%), radial-gradient(ellipse at 80% 80%, rgba(0,212,170,0.03) 0%, transparent 50%)", color: "#e2e8f0", fontFamily: "'DM Sans', sans-serif", display: "flex", flexDirection: "column" }}>
@@ -588,32 +590,50 @@ export default function Terminal() {
           </div>
           <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
           <nav style={{ display: "flex", gap: 2 }}>
-            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK"].map((item, i) => (<span key={item} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: i === 0 ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: i === 0 ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
+            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","MS SIGNALS"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
           </nav>
         </div>
         <Clock />
       </div>
       <TickerTape tickers={tickers} />
       <div className="terminal-root" style={{ flex: 1, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-        <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1fr", gap: 12, height: 520 }}>
-          <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`}>
-            <NewsFeed newsItems={news} newsStatus={newsStatus} />
-          </Panel>
-          <Panel title="Options Chain" badge="SPY · Live"><OptionsChain /></Panel>
-          <Panel title="Economic Indicators" badge={Object.keys(macroLive).length > 0 ? "LIVE" : "Static"}>
-            <EconomicIndicators macroLive={macroLive} />
-          </Panel>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, height: 480 }}>
-          <Panel title="ES Futures — Directional Probability" badge="AI MODEL · LIVE">
-            <DirectionalBias tickers={tickers} market={market} />
-          </Panel>
-          <Panel title="Gamma Exposure Levels" badge="ES · NQ"><GammaLevels /></Panel>
-        </div>
-        <Panel title="AI Market Strategist · Live Briefing" badge="POWERED BY CLAUDE" style={{ height: 180 }}>
-          <AIAnalysis prompt="Give a sharp morning market briefing for a day trader. Cover: 1) key macro risk events, 2) options market dynamics, 3) rates picture, 4) top 2 trade ideas with entry/risk levels." />
-        </Panel>
+        {activeTab === "MS SIGNALS" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
+            <Panel title="Signals Engine" badge="PB1 · PB2 · PB3 · PB4" style={{ minHeight: 600 }}>
+              <SignalsPanel />
+            </Panel>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`} style={{ flex: 1 }}>
+                <NewsFeed newsItems={news} newsStatus={newsStatus} />
+              </Panel>
+              <Panel title="AI Market Strategist" badge="POWERED BY CLAUDE" style={{ height: 180 }}>
+                <AIAnalysis prompt="Give a sharp morning market briefing for a day trader. Cover: 1) key macro risk events, 2) options market dynamics, 3) rates picture, 4) top 2 trade ideas with entry/risk levels." />
+              </Panel>
+            </div>
+          </div>
+        ) : (
+          <>
+            <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1fr", gap: 12, height: 520 }}>
+              <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`}>
+                <NewsFeed newsItems={news} newsStatus={newsStatus} />
+              </Panel>
+              <Panel title="Options Chain" badge="SPY · Live"><OptionsChain /></Panel>
+              <Panel title="Economic Indicators" badge={Object.keys(macroLive).length > 0 ? "LIVE" : "Static"}>
+                <EconomicIndicators macroLive={macroLive} />
+              </Panel>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, height: 480 }}>
+              <Panel title="ES Futures — Directional Probability" badge="AI MODEL · LIVE">
+                <DirectionalBias tickers={tickers} market={market} />
+              </Panel>
+              <Panel title="Gamma Exposure Levels" badge="ES · NQ"><GammaLevels /></Panel>
+            </div>
+            <Panel title="AI Market Strategist · Live Briefing" badge="POWERED BY CLAUDE" style={{ height: 180 }}>
+              <AIAnalysis prompt="Give a sharp morning market briefing for a day trader. Cover: 1) key macro risk events, 2) options market dynamics, 3) rates picture, 4) top 2 trade ideas with entry/risk levels." />
+            </Panel>
+          </>
+        )}
       </div>
       <div style={{ padding: "6px 20px", borderTop: "1px solid rgba(255,255,255,0.05)", display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1e293b", fontFamily: "'IBM Plex Mono', monospace" }}>
         <span>AXIOM TERMINAL v3.1.0 · FOR INFORMATIONAL PURPOSES ONLY · NOT FINANCIAL ADVICE</span>
