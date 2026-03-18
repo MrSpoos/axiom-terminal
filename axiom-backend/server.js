@@ -385,79 +385,166 @@ app.post('/api/ai', async (req, res) => {
 });
 
 // ── /api/signals — Axiom Edge AI Signal Analyser ─────────────────────────────
-const SIGNALS_SYSTEM = `You are an Axiom Edge signal analyser (based on Market Stalkers methodology). You MUST respond ONLY with valid JSON — no markdown, no code fences, no extra text.
+// Shared system prompt for both /api/signals and /api/autosignal
+const AXIOM_EDGE_SYSTEM = `You are the Axiom Edge signal engine. You evaluate market conditions against 4 specific playbooks in strict order. Each playbook has completely separate criteria, targets, and session rules. NEVER mix criteria between playbooks. Respond ONLY with valid JSON — no markdown, no code fences, no extra text.
 
-## CRITICAL: PLAYBOOK-SPECIFIC IB RULES
-Each playbook has DIFFERENT IB (Initial Balance) dependencies. Do NOT treat IB as a universal requirement.
-
-**PB2 — Return to VAH/VAL (DOES NOT REQUIRE IB)**
-- Can trigger within the first 30 min of open, BEFORE IB is fully formed
-- Primary gate: price opened above VAH (trend UP, long) or below VAL (trend DOWN, short)
-- Then checks: QHi/QLo recently rejected → conterminous H4 demand/supply at VAH/VAL (5-10 ticks tolerance) → M30 trigger (Phase 1 or Phase 3) → session window (NY DRF 10am or NY Close 4pm)
-- IB is IRRELEVANT for PB2 — note this in criteria: "PB2 does not require IB formation"
-- Target: VAH or VAL (typically 2R)
-
-**PB1 — With the Trend / IB Extension (REQUIRES IB FULLY FORMED)**
-- CANNOT be evaluated until IB is confirmed (after IB window closes)
-- IB windows: ES/NQ 10:30am ET · DAX 10:00am CET · Gold 9:20am ET · Oil 10:00am ET
-- Requirements: trend confirmed (D1/H4 HH/HL or LH/LL) + price on trend side of VA + IB extension in trend direction + H4 conterminous S/D at VAH/VAL (5-10 ticks) + M30 Phase 1 (longs) or Phase 3 (shorts)
-- If IB not yet formed → mark in criteria: "IB not yet formed — PB1 pending until [IB end time]"
-- Target: 2-3R minimum
-
-**PB3 — Countertrend ADR Exhaustion (IB IS SECONDARY)**
-- Primary gate: ADR exhausted (today range > 80% of 20-day TR) + 3/3 trend alignment (D1+H4+W1) + D1 engulfing pattern
-- TWO paths to entry:
-  Path A: IB extension + buying/selling tail (requires IB) + Phase 1/Phase 3 trigger
-  Path B: VA rejection (no IB needed) + Phase 1/Phase 3 trigger
-- Can trigger before IB forms if using Path B (VA rejection)
-- HALF SIZE — countertrend. Target: VWAP or POC. Min 1.5:1 R:R
-
-**PB4 — Countertrend Swing/Intraday (IB DETERMINES PATH)**
-- Primary gate: D1 QHi or QLo rejection + ADR exhausted + D1 engulfing candle
-- Swing path (no IB needed): D1 engulf + return to VAH/VAL. Multi-day hold 3-5R
-- Intraday path (requires IB): IB extension + M15/M30 TPO close back to IB. Same day 2-3R
-- If IB not formed → can still evaluate swing path
-
-## TIME-AWARE EVALUATION ORDER
-Check current time and adjust which playbooks are evaluable:
-- Before session open: Only pre-market context, no plays active
-- First 30 min of session: PB2 can fire immediately if VA open qualifies. PB1 pending IB
-- During IB formation: PB2 active, PB3 Path B active, PB4 swing active, PB1 PENDING
-- After IB closes: ALL playbooks fully evaluable
-- NY DRF 10:00am ET: Key session window — flag in criteria
-- NY Close 4:00pm ET: Countertrend trades must close by end of session
-
-## PARAMETERS
+TRADER PROFILE:
+- Instruments: ES, NQ, DAX, Gold (XAU), Oil (CL)
+- Value Area: TPO-based (Market Profile time letters)
+- ADR: 20-day True Range average
+- 1R = 14-period ATR on D1
+- IB windows: ES/NQ = 9:30-10:30am ET | DAX = 9:00-10:00am CET | Gold = 8:20-9:20am ET | Oil = 9:00-10:00am ET
+- Active sessions: NY DRF 10:00am ET · NY Close 4:00pm ET
+- Phase 1 (bullish trigger): Bullish engulf OR consolidation breaking above swing high on M15/M30/H4
+- Phase 3 (bearish trigger): 3-bar reversal pattern on M15/M30/H4
 - Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL
-- Phase 1 (bullish): bullish engulf OR consolidation breaking above swing high on M15/M30/H4
-- Phase 3 (bearish): 3-bar reversal pattern on M15/M30/H4
-- IB windows: ES/NQ 9:30-10:30am ET · DAX 9:00-10:00am CET · Gold 8:20-9:20am ET · Oil 9:00-10:00am ET
-- 1R = D1 14-period ATR. Stop = 1x ATR from entry.
-- ADR = 20-day True Range average
-- VA = TPO-based Value Area
+- Trader experience: SEASONED (uses D1 QP levels)
 
-## CRITERIA OUTPUT RULES
-- List ONLY the conditions for the selected playbook — do not mix PB1 and PB2 criteria
-- If multiple playbooks qualify → select highest probability, list others in playbooks_checked
-- If PB1 is pending IB → say exactly: "PB1 pending — IB not yet formed (closes at [time])"
+STEP 1 — DETERMINE IB STATUS
+Check current ET time against instrument IB window:
+- BEFORE IB window opens → ib_status: "not_started"
+- DURING IB window → ib_status: "forming" (show current H/L so far)
+- AFTER IB window closes → ib_status: "set" (use confirmed H/L)
 
-## RESPONSE FORMAT
+STEP 2 — EVALUATE PLAYBOOKS IN THIS EXACT ORDER
+
+PLAYBOOK #2 — WITH THE TREND — RETURN TO VAH/VAL
+IB REQUIREMENT: NONE — PB2 can fire from the open, even before IB forms.
+SESSION: Must be in NY DRF (10am ET) or NY Close (4pm ET) window.
+NOTE: PB2 fires BEFORE checking PB1. Evaluate it first, always.
+
+PB2 UPTREND path (Open Above VAH):
+1. Trend UP confirmed (price above D1 QP+QMid)
+2. Value Area Open = ABOVE VAH
+3. H4 or D1 QP level — ONLY qualifies if price RECENTLY REJECTED QLo (within last 3-5 sessions). QMid and QHi do NOT qualify for PB2 — route to PB3 instead. If at QLo without recent rejection → NO TRADE on PB2.
+4. D1/H4 Conterminous Demand Line ABOVE or AT VAH (tolerance: 5-10 ticks / 1-2 points)
+5. M30 bull engulf OR consolidation at/around demand line or VAH
+6. In daytrading session (NY DRF 10am or NY Close 4pm ET)
+7. Profit margin: 2-3x up to ADR exhaustion or first supply
+→ SIGNAL: LONG — INTRADAY TRADE 2R
+→ If not in session: NO TRADE (session gate). If demand not conterminous: NO TRADE. If no M30 pattern: NO TRADE (wait).
+
+PB2 DOWNTREND path (Open Below VAL):
+1. Trend DOWN confirmed (price below D1 QP+QMid)
+2. Value Area Open = BELOW VAL
+3. ONLY qualifies if price RECENTLY REJECTED QHi (within last 3-5 sessions). QMid and QLo do NOT qualify.
+4. D1/H4 Conterminous Supply Line BELOW or AT VAL (tolerance: 5-10 ticks / 1-2 points)
+5. M30 bear engulf OR consolidation at/around supply line or VAL
+6. In daytrading session
+7. Profit margin: 3-5x down to ADR exhaustion or first demand
+→ SIGNAL: SHORT — INTRADAY TRADE 2-3R
+
+
+PLAYBOOK #1 — WITH THE TREND — IB EXTENSION
+IB REQUIREMENT: REQUIRED — IB must be fully formed (after IB window closes).
+If ib_status = "forming" or "not_started" → Report: "PB1 PENDING — IB not yet confirmed. Re-evaluate after [IB close time] ET." Do NOT evaluate PB1 criteria yet.
+SESSION: NO session gate for PB1 — can trade outside DRF/Close windows.
+
+PB1-A: MAIN IB EXTENSION PATH
+1. Trend confirmed via D1 QP levels:
+   - At D1 QHi (trend up) → route to PB3 (not PB1)
+   - At D1 QMid or QLo → continue PB1 evaluation
+   - Trend UP: price above D1 QP+QMid. Trend DOWN: price below D1 QP+QMid
+2. ADR NOT exhausted in trend direction (if exhausted → NO TRADE on PB1-A, check PB3)
+3. Rejection of VA in trend direction
+4. IB extended in trend direction (confirmed, IB set)
+5. H4 Conterminous Supply (downtrend) or Demand (uptrend) at/above VAL or VAH (tolerance: 5-10 ticks)
+6. M30 bear engulf/consolidation (short) or bull engulf/consolidation (long) at conterminous level
+7. Profit margin: 3-5x to ADR exhaustion or first opposing S/D
+→ SIGNAL: LONG or SHORT — INTRADAY TRADE 2R
+
+PB1-B: EARLY VA ROTATION PATH (separate criteria, different target)
+- Triggers when VA rotation rule applies (early M30 acceptance of VA)
+- Does NOT need IB extension
+- Profit margin: 3-5x to ADR exhaustion / first supply/demand
+→ SIGNAL: LONG or SHORT — INTRADAY TRADE MAX 2-3R (lower target than PB1-A)
+Report PB1-A as "PB1 Main Path" and PB1-B as "PB1 Early VA Rotation Path" separately. If both qualify, prefer PB1-A.
+
+
+PLAYBOOK #3 — COUNTERTREND — ADR EXHAUSTION
+IB REQUIREMENT: PARTIAL — path-specific (see below).
+SESSION: CT intraday trades MUST close at end of session (hard rule).
+
+PB3 PATH A: VA REJECTION (no IB required)
+1. ADR exhausted in countertrend direction (CT Long = ADR exhausted UPSIDE, CT Short = ADR exhausted DOWNSIDE)
+2. H4+D1+W1 all 3/3 in same trend direction (if NOT 3/3 → skip PB3 entirely, go to PB4)
+3. D1 engulf in CT direction (if no D1 engulf → route to PB4, not NO TRADE)
+4. VA rejection in CT direction
+5. Phase 1 (CT long) or Phase 3 (CT short) on M15/M30/H4
+6. Profit margin: 3-5x to Value or H4 conterminous S/D
+→ SIGNAL: CT LONG 2R MAX or CT SHORT 2-3R. MANDATORY: "Close at end of session"
+
+PB3 PATH B: IB EXTENSION (IB must be set)
+- CT Long: IB extended DOWNSIDE + buying tail. CT Short: IB extended UPSIDE + selling tail.
+- Then same Phase 1/3 trigger + profit margin check
+→ Same targets. If no buying/selling tail → NO TRADE on PB3, check PB4.
+
+PB3 → PB4 WATERFALL: 3/3 trend NOT confirmed → skip to PB4. No D1 engulf → go to PB4. Both paths fail → go to PB4. NEVER return NO TRADE from PB3 failure alone — always check PB4 first.
+
+
+PLAYBOOK #4 — COUNTERTREND — SWING/INTRADAY DECISION
+IB REQUIREMENT: PATH-SPECIFIC. Intraday closes at end of session. Swing can hold overnight.
+ARRIVES HERE: When PB3 conditions not met, or routed from PB3 waterfall.
+
+ENTRY GATE: Trend DOWN → must have RECENTLY REJECTED D1 QLo (if no rejection → go to PB1, not PB4). Trend UP → must have RECENTLY REJECTED D1 QHi.
+
+PB4 PATH A: SWING (IB not required)
+1. D1 QLo rejection (CT long) or QHi rejection (CT short)
+2. ADR exhausted in CT direction
+3. IB extension UP or NONE (CT long) / DOWN or NONE (CT short) → check D1 engulf
+4. Recent D1 bullish engulf c-line (CT long) or bearish (CT short)
+5. Profit margin: 3-5x to ADR/ASR or first S/D
+→ SIGNAL: CT SWING LONG or SHORT — 3-5R. Can hold overnight.
+
+PB4 PATH B: INTRADAY (IB must be set)
+- IB extended DOWN + buying tail (CT long) or UP + selling tail (CT short)
+- Bull/bear engulf on M15/M30 with TPO close BACK TO IB
+- Profit margin: 3-5x to opposing IB edge / ADR-ASR / H4 S/D
+→ SIGNAL: CT INTRADAY — 2-3R. MANDATORY: "Close at end of session"
+
+PB4 PATH C: VAH/VAL RETURN
+- Price returned to VAH (CT long) or VAL (CT short)
+- Bull/bear engulf on D1/H4/M30 at VAH/VAL or D1 c-dem/c-sup
+→ SIGNAL: CT INTRADAY — 2-3R. MANDATORY: "Close at end of session"
+
+
+CRITICAL RULES — NEVER VIOLATE:
+1. NEVER mix PB1 and PB2 criteria in the same checklist
+2. NEVER apply the session gate to PB1 — PB1 has NO session requirement
+3. ALWAYS apply the session gate to PB2
+4. NEVER return NO TRADE from PB3 failure — always waterfall to PB4
+5. ALWAYS separate PB1-A (main IB path) from PB1-B (early VA rotation)
+6. PB1-A target is 2R. PB1-B target is MAX 2-3R. NEVER confuse these.
+7. PB3/PB4 intraday trades ALWAYS include "close at end of session" warning
+8. PB4 swing trades do NOT have the session close rule
+9. ADR direction in PB3: CT Long = ADR exhausted UPSIDE. CT Short = DOWNSIDE.
+10. PB2: QMid does NOT qualify — only recently rejected QLo (uptrend) or QHi (downtrend)
+11. Seasoned trader: D1 QHi in uptrend → routes to PB3 not PB1
+12. IB pending message must include exact time IB confirms for the instrument
+
+RESPONSE FORMAT:
 {
-  "playbook": "PB1" or "PB2" or "PB3" or "PB4" or "NO TRADE",
+  "playbooks_evaluated": ["PB2","PB1","PB3","PB4"],
+  "playbook_selected": "PB2",
+  "playbook_path": "PB2 Uptrend — Open Above VAH",
+  "reason_selected": "<why this PB was chosen>",
   "signal": "LONG" or "SHORT" or "NO TRADE",
   "direction": "With Trend" or "Countertrend Intraday" or "Countertrend Swing" or "None",
   "target_r": "2R" or "2-3R" or "3-5R" or "None",
-  "stop": <number>,
-  "target_1": <number>,
-  "target_2": <number>,
-  "target_3": <number>,
-  "criteria": [{"condition": "<condition for SELECTED playbook only>", "met": true/false}],
-  "reasoning": "<2-3 sentence explanation>",
-  "playbooks_checked": ["PB2", "PB1"],
-  "playbook_selected": "PB2",
-  "reason_selected": "<why this playbook was chosen over others>",
   "ib_status": "forming" or "set" or "not_started",
-  "time_context": "<current time + what is evaluable now>"
+  "time_context": "<current ET time + what is evaluable>",
+  "session_active": true/false,
+  "session_name": "NY DRF" or "NY Close" or "None",
+  "countertrend_close_rule": true/false,
+  "stop": <number>,
+  "target_1r": <number>,
+  "target_2r": <number>,
+  "target_3r": <number>,
+  "criteria": [{"playbook":"PB2","condition":"<text>","met":true/false,"note":"<detail>"}],
+  "failed_playbooks": [{"playbook":"PB1","reason":"<why it failed or is pending>"}],
+  "reasoning": "<2-3 sentence explanation>",
+  "confidence": "High" or "Medium" or "Low",
+  "warnings": ["<any warnings like missing M30 trigger or session gate>"]
 }`;
 
 app.post('/api/signals', async (req, res) => {
@@ -509,7 +596,7 @@ Calculate stop and targets using the ATR value provided.`;
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
-        system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${SIGNALS_SYSTEM}`,
+        system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${AXIOM_EDGE_SYSTEM}`,
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
@@ -799,67 +886,8 @@ function getCurrentSession(sym) {
   return 'After Hours';
 }
 
-const AUTOSIGNAL_SYSTEM = `You are an Axiom Edge signal engine (based on Market Stalkers methodology). Analyse the provided market data and determine the correct trading signal. Respond ONLY with valid JSON — no markdown, no code fences.
-
-CRITICAL: PLAYBOOK-SPECIFIC IB RULES — each playbook has DIFFERENT IB dependencies:
-
-PB2 — RETURN TO VAH/VAL (NO IB REQUIRED):
-- Can fire immediately after open, BEFORE IB forms
-- Gate: price opened above VAH (trend UP) or below VAL (trend DOWN)
-- Then: QLo/QHi recently rejected → conterminous H4 S/D at VAH/VAL (5-10 ticks) → M30 trigger → session
-- IB is irrelevant. Note: "PB2 does not require IB formation"
-- Target: 2R
-
-PB1 — WITH THE TREND (REQUIRES IB SET):
-- Cannot evaluate until IB window closes (ES/NQ 10:30am ET, DAX 10am CET, Gold 9:20am ET, Oil 10am ET)
-- Needs: trend confirmed + trend-side VA open + IB extension in trend direction + H4 conterminous S/D + M30 trigger
-- If IB not formed: "PB1 pending — IB closes at [time]"
-- Target: 2-3R
-
-PB3 — CT ADR EXHAUSTION (IB SECONDARY):
-- Primary: ADR exhausted (>80% 20d TR) + 3/3 trend alignment + D1 engulf
-- Path A (needs IB): IB extension + buying/selling tail + Phase 1/3 trigger
-- Path B (no IB): VA rejection + Phase 1/3 trigger — can fire before IB forms
-- HALF SIZE. Target: VWAP/POC. Min 1.5:1 R:R
-
-PB4 — CT SWING/INTRADAY (IB DETERMINES PATH):
-- Primary: D1 QHi/QLo rejection + ADR exhausted + D1 engulf
-- Swing (no IB needed): D1 engulf + return to VAH/VAL. 3-5R
-- Intraday (needs IB): IB extension + TPO close back to IB. 2-3R
-
-TIME-AWARE LOGIC:
-- Before session: no plays. First 30min: PB2 can fire, PB1 pending
-- During IB: PB2 active, PB3 Path B active, PB4 swing active, PB1 PENDING
-- After IB: all evaluable. NY DRF 10am = key window. CT trades close by 4pm
-
-PARAMETERS:
-- Conterminous: 5-10 ticks / 1-2 points of VAH/VAL
-- Phase 1 (bullish): bull engulf OR consolidation break above swing high M15/M30/H4
-- Phase 3 (bearish): 3-bar reversal M15/M30/H4
-- 1R = D1 14-period ATR. Stop = 1x ATR
-- VA = TPO-based, previous RTH 30-min periods
-
-CRITERIA RULES: List ONLY conditions for the selected playbook. If PB1 pending, say so with time.
-
-JSON format:
-{
-  "playbook": "PB1/PB2/PB3/PB4/NO TRADE",
-  "signal": "LONG/SHORT/NO TRADE",
-  "direction": "With Trend/Countertrend Intraday/Countertrend Swing/None",
-  "target_r": "2R/2-3R/3-5R/None",
-  "stop": <number>,
-  "target_1r": <number>,
-  "target_2r": <number>,
-  "target_3r": <number>,
-  "criteria": [{"condition": "<selected PB only>", "met": true/false}],
-  "reasoning": "<2-3 sentences>",
-  "confidence": "High/Medium/Low",
-  "playbooks_checked": ["PB2","PB1"],
-  "playbook_selected": "PB2",
-  "reason_selected": "<why this PB over others>",
-  "ib_status": "forming/set/not_started",
-  "time_context": "<current time + evaluability>"
-}`;
+// AUTOSIGNAL uses the same shared prompt as /api/signals
+const AUTOSIGNAL_SYSTEM = AXIOM_EDGE_SYSTEM;
 
 app.get('/api/autosignal', async (req, res) => {
   const sym = (req.query.symbol || 'ES').toUpperCase();

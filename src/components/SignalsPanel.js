@@ -532,6 +532,29 @@ const PLAYBOOK_NAMES = {
 const SIGNAL_COLORS = { LONG: "#00d4aa", SHORT: "#ff4d6d", "CT LONG": "#f6c90e", "CT SHORT": "#f6c90e", "SWING LONG": "#4a9eff", "SWING SHORT": "#4a9eff", "NO TRADE": "#475569" };
 const CONFIDENCE_COLORS = { High: "#00d4aa", Medium: "#f6c90e", Low: "#ff4d6d" };
 
+// ── COLLAPSED FAILED PLAYBOOKS ────────────────────────────────────────────────
+function FailedPlaybooks({ items }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button onClick={() => setOpen(!open)} style={{
+        fontSize: 8, fontFamily: MONO, color: "#334155", background: "none",
+        border: "none", cursor: "pointer", padding: 0, letterSpacing: "0.06em",
+      }}>{open ? "\u25B2" : "\u25BC"} Other playbooks checked ({items.length})</button>
+      {open && (
+        <div style={{ marginTop: 4, background: "rgba(0,0,0,0.15)", borderRadius: 3, padding: 6 }}>
+          {items.map((f, i) => (
+            <div key={i} style={{ fontSize: 8, fontFamily: MONO, padding: "2px 0", borderBottom: i < items.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none" }}>
+              <span style={{ color: "#475569", fontWeight: 700 }}>{f.playbook}</span>
+              <span style={{ color: "#334155" }}> — {f.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── AUTO SIGNAL ENGINE ───────────────────────────────────────────────────────
 function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
   const [result, setResult] = useState(null);
@@ -659,54 +682,60 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
       {/* Signal Result */}
       {result && (
         <div style={{ background: "rgba(0,0,0,0.4)", border: `2px solid ${sigColor}`, borderRadius: 8, padding: 16 }}>
+          {/* Countertrend close banner */}
+          {result.countertrend_close_rule && (
+            <div style={{ background: "rgba(255,77,109,0.12)", border: "1px solid rgba(255,77,109,0.3)", borderRadius: 4, padding: "5px 8px", marginBottom: 8, textAlign: "center", fontSize: 9, fontWeight: 700, fontFamily: MONO, color: "#ff4d6d", letterSpacing: "0.06em" }}>
+              {"\u26A0"} CLOSE AT END OF SESSION — Countertrend rule
+            </div>
+          )}
+
+          {/* Time context bar */}
+          {result.time_context && (
+            <div style={{ fontSize: 8, fontFamily: MONO, color: "#64748b", textAlign: "center", marginBottom: 8, padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+              {result.time_context}
+            </div>
+          )}
+
           {/* Top badges */}
           <div style={{ textAlign: "center", marginBottom: 10 }}>
             <div style={{ display: "flex", justifyContent: "center", gap: 5, marginBottom: 6, flexWrap: "wrap" }}>
               <span style={{ fontSize: 8, fontFamily: MONO, color: "#475569", padding: "1px 6px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>{selectedInstrument}</span>
               {result.direction && result.direction !== "None" && (
-                <span style={{ fontSize: 8, fontFamily: MONO, color: sigColor, padding: "1px 6px", background: sigColor + "15", borderRadius: 3 }}>
-                  {result.direction}
-                </span>
+                <span style={{ fontSize: 8, fontFamily: MONO, color: sigColor, padding: "1px 6px", background: sigColor + "15", borderRadius: 3 }}>{result.direction}</span>
               )}
               {result.target_r && result.target_r !== "None" && (
-                <span style={{ fontSize: 8, fontFamily: MONO, color: "#00d4aa", padding: "1px 6px", background: "rgba(0,212,170,0.1)", borderRadius: 3 }}>
-                  {result.target_r}
-                </span>
+                <span style={{ fontSize: 8, fontFamily: MONO, color: "#00d4aa", padding: "1px 6px", background: "rgba(0,212,170,0.1)", borderRadius: 3 }}>{result.target_r}</span>
+              )}
+              {result.ib_status && (
+                <span style={{ fontSize: 8, fontFamily: MONO, padding: "1px 6px", borderRadius: 3, fontWeight: 700,
+                  color: result.ib_status === "set" ? "#00d4aa" : result.ib_status === "forming" ? "#f6c90e" : "#475569",
+                  background: (result.ib_status === "set" ? "#00d4aa" : result.ib_status === "forming" ? "#f6c90e" : "#475569") + "15",
+                }}>IB {result.ib_status.toUpperCase()}</span>
               )}
               {result.confidence && (
-                <span style={{ fontSize: 8, fontFamily: MONO, color: confColor, padding: "1px 6px", background: confColor + "12", borderRadius: 3, fontWeight: 700 }}>
-                  {result.confidence}
-                </span>
+                <span style={{ fontSize: 8, fontFamily: MONO, color: confColor, padding: "1px 6px", background: confColor + "12", borderRadius: 3, fontWeight: 700 }}>{result.confidence}</span>
               )}
             </div>
-            <div style={{ fontSize: 26, fontWeight: 700, color: sigColor, fontFamily: MONO, marginBottom: 2 }}>
-              {result.signal}
-            </div>
+            <div style={{ fontSize: 26, fontWeight: 700, color: sigColor, fontFamily: MONO, marginBottom: 2 }}>{result.signal}</div>
             <div style={{ fontSize: 9, fontWeight: 600, color: "#94a3b8", fontFamily: MONO, letterSpacing: "0.08em" }}>
-              {PLAYBOOK_NAMES[result.playbook] || result.playbook}
+              {PLAYBOOK_NAMES[result.playbook_selected || result.playbook] || result.playbook_selected || result.playbook}
             </div>
+            {result.playbook_path && (
+              <div style={{ fontSize: 8, color: "#475569", fontFamily: MONO, marginTop: 2 }}>{result.playbook_path}</div>
+            )}
             {result.reason_selected && (
               <div style={{ fontSize: 8, color: "#64748b", fontFamily: MONO, marginTop: 4 }}>{result.reason_selected}</div>
             )}
           </div>
 
-          {/* Time context + IB status */}
-          {(result.time_context || result.ib_status) && (
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 8 }}>
-              {result.ib_status && (
-                <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
-                  color: result.ib_status === "set" ? "#00d4aa" : result.ib_status === "forming" ? "#f6c90e" : "#475569",
-                  background: (result.ib_status === "set" ? "#00d4aa" : result.ib_status === "forming" ? "#f6c90e" : "#475569") + "15",
-                  fontWeight: 700 }}>IB {result.ib_status.toUpperCase()}</span>
-              )}
-              {result.time_context && (
-                <span style={{ fontSize: 7, fontFamily: MONO, color: "#475569", padding: "2px 6px", background: "rgba(255,255,255,0.04)", borderRadius: 3 }}>{result.time_context}</span>
-              )}
-              {result.playbooks_checked && (
-                <span style={{ fontSize: 7, fontFamily: MONO, color: "#334155", padding: "2px 6px", background: "rgba(255,255,255,0.03)", borderRadius: 3 }}>
-                  Checked: {result.playbooks_checked.join(", ")}
-                </span>
-              )}
+          {/* Warnings */}
+          {result.warnings && result.warnings.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 8 }}>
+              {result.warnings.map((w, i) => (
+                <div key={i} style={{ fontSize: 8, fontFamily: MONO, color: "#f6c90e", padding: "3px 8px", background: "rgba(246,201,14,0.08)", border: "1px solid rgba(246,201,14,0.15)", borderRadius: 3 }}>
+                  {"\u26A0"} {w}
+                </div>
+              ))}
             </div>
           )}
 
@@ -723,17 +752,17 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
           {/* Criteria checklist */}
           {result.criteria && result.criteria.length > 0 && (
             <div style={{ marginBottom: 10, background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: 8 }}>
-              <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>CRITERIA CHECK — {result.playbook_selected || result.playbook}</div>
+              <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>CRITERIA — {result.playbook_selected || result.playbook}</div>
               {result.criteria.map((c, i) => (
-                <div key={i} style={{
-                  display: "flex", alignItems: "center", gap: 6, fontSize: 9, fontFamily: MONO,
-                  padding: "2px 0",
-                  borderBottom: i < result.criteria.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none",
-                }}>
-                  <span style={{ color: c.met ? "#00d4aa" : "#ff4d6d", fontSize: 10, minWidth: 14 }}>
-                    {c.met ? "\u2713" : "\u2717"}
-                  </span>
-                  <span style={{ color: c.met ? "#94a3b8" : "#64748b" }}>{c.condition}</span>
+                <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 9, fontFamily: MONO, padding: "3px 0", borderBottom: i < result.criteria.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none" }}>
+                  <span style={{ color: c.met ? "#00d4aa" : "#ff4d6d", fontSize: 10, minWidth: 14, flexShrink: 0 }}>{c.met ? "\u2713" : "\u2717"}</span>
+                  <div style={{ flex: 1 }}>
+                    <span style={{ color: c.met ? "#94a3b8" : "#64748b" }}>{c.condition}</span>
+                    {c.note && <div style={{ fontSize: 7, color: "#334155", marginTop: 1 }}>{c.note}</div>}
+                  </div>
+                  {c.playbook && c.playbook !== (result.playbook_selected || result.playbook) && (
+                    <span style={{ fontSize: 7, color: "#334155", fontFamily: MONO }}>{c.playbook}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -746,10 +775,15 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
             </div>
           )}
 
+          {/* Failed playbooks (collapsed) */}
+          {result.failed_playbooks && result.failed_playbooks.length > 0 && (
+            <FailedPlaybooks items={result.failed_playbooks} />
+          )}
+
           {/* Timestamp */}
           {result.ts && (
             <div style={{ fontSize: 7, color: "#1e293b", fontFamily: MONO, marginTop: 6, textAlign: "right" }}>
-              {new Date(result.ts).toLocaleTimeString()} EST {timeAgo && `\u00b7 ${timeAgo}`}
+              {new Date(result.ts).toLocaleTimeString()} ET {timeAgo && `\u00b7 ${timeAgo}`}
             </div>
           )}
         </div>
