@@ -1017,6 +1017,10 @@ function AISignalAnalyser({ chartData }) {
   const [fetchingATR, setFetchingATR] = useState(false);
   const [qpLoading, setQpLoading] = useState(false);
   const [qpMsg, setQpMsg] = useState(null); // { type: "success"|"warning"|"error", text }
+  const [h4SupplyZones, setH4SupplyZones] = useState([]);
+  const [h4DemandZones, setH4DemandZones] = useState([]);
+  const [zonesLoading, setZonesLoading] = useState(false);
+  const [zonesMsg, setZonesMsg] = useState(null);
 
   const calcQP = useCallback(async () => {
     setQpLoading(true); setQpMsg(null);
@@ -1040,6 +1044,25 @@ function AISignalAnalyser({ chartData }) {
     } catch (e) { setQpMsg({ type: "error", text: e.message }); }
     setQpLoading(false);
   }, [form.instrument]);
+
+  const YAHOO_MAP = { ES: "ES=F", NQ: "NQ=F", DAX: "^GDAXI", XAU: "GC=F", OIL: "CL=F" };
+  const fetchZones = useCallback(async () => {
+    setZonesLoading(true); setZonesMsg(null);
+    try {
+      const cp = parseFloat(form.currentPrice) || 0;
+      const sym = YAHOO_MAP[form.instrument] || "ES=F";
+      const r = await fetch(`${BACKEND_URL}/api/h4-zones?symbol=${encodeURIComponent(sym)}&current_price=${cp}&instrument=${form.instrument}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Failed");
+      setH4SupplyZones(d.supply || []);
+      setH4DemandZones(d.demand || []);
+      const sc = (d.supply || []).length, dc = (d.demand || []).length;
+      setZonesMsg(sc || dc
+        ? { type: "success", text: `${sc} supply \u00b7 ${dc} demand zones detected` }
+        : { type: "warning", text: "No zones detected near current price" });
+    } catch (e) { setZonesMsg({ type: "error", text: e.message }); }
+    setZonesLoading(false);
+  }, [form.instrument, form.currentPrice]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -1229,6 +1252,38 @@ function AISignalAnalyser({ chartData }) {
           </div>
         );
       })()}
+
+      {/* H4 Supply/Demand Zones */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={sectionStyle}>H4 SUPPLY / DEMAND ZONES</div>
+        <button onClick={fetchZones} disabled={zonesLoading} style={{
+          fontSize: 7, fontFamily: MONO, fontWeight: 700, color: "#4a9eff",
+          background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.2)",
+          borderRadius: 3, padding: "2px 8px", cursor: zonesLoading ? "default" : "pointer",
+          letterSpacing: "0.06em",
+        }}>{zonesLoading ? "..." : "FETCH ZONES"}</button>
+      </div>
+      {zonesMsg && (
+        <div style={{
+          fontSize: 8, fontFamily: MONO, padding: "3px 6px", borderRadius: 3, marginBottom: 2,
+          color: zonesMsg.type === "success" ? "#00d4aa" : zonesMsg.type === "warning" ? "#f6c90e" : "#ff4d6d",
+          background: (zonesMsg.type === "success" ? "#00d4aa" : zonesMsg.type === "warning" ? "#f6c90e" : "#ff4d6d") + "10",
+        }}>{zonesMsg.text}</div>
+      )}
+      {(h4SupplyZones.length > 0 || h4DemandZones.length > 0) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
+          {h4SupplyZones.map((z, i) => (
+            <span key={`s${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+              background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.15)", color: "#ff4d6d",
+            }}>Supply: {z.price_low}\u2013{z.price_high}</span>
+          ))}
+          {h4DemandZones.map((z, i) => (
+            <span key={`d${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+              background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.15)", color: "#00d4aa",
+            }}>Demand: {z.price_low}\u2013{z.price_high}</span>
+          ))}
+        </div>
+      )}
 
       {/* IB */}
       <div style={sectionStyle}>INITIAL BALANCE (per instrument)</div>
