@@ -405,7 +405,8 @@ Requirements: D1 QHi or QLo rejection (price tested quarterly extreme and revers
 - Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL
 - Phase 1 (bullish trigger): bullish engulf OR consolidation breaking above swing high on M15/M30/H4
 - Phase 3 (bearish trigger): 3-bar reversal pattern on M15/M30/H4
-- IB = Initial Balance = 8:00-9:00am EST (first 60 min NY session)
+- IB = Initial Balance (first 60 min of primary session). IB window varies by instrument:
+  ES/NQ: 9:30-10:30am ET · DAX: 9:00-10:00am CET (3:00-4:00am ET) · Gold: 8:20-9:20am ET · Oil: 9:00-10:00am ET
 - Active sessions: NY DRF (10:00am EST) · NY Close (4:00pm EST)
 - 1R = D1 14-period ATR
 - ADR = 20-day True Range average
@@ -605,20 +606,42 @@ function detectM30Pattern(bars, atr) {
   return 'None';
 }
 
-function getESTTime() {
+function getESTMins() {
   const now = new Date();
   const est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  return { h: est.getHours(), m: est.getMinutes(), mins: est.getHours() * 60 + est.getMinutes() };
+  return est.getHours() * 60 + est.getMinutes();
 }
 
-function getCurrentSession() {
-  const { mins } = getESTTime();
-  if (mins >= 480 && mins < 540) return 'IB (8:00-9:00am)';
+// IB windows per instrument (all times in ET minutes-since-midnight)
+const IB_WINDOWS = {
+  ES:  { start: 570, end: 630, label: '9:30-10:30am ET' },    // 9:30-10:30 ET
+  NQ:  { start: 570, end: 630, label: '9:30-10:30am ET' },    // 9:30-10:30 ET
+  DAX: { start: 180, end: 240, label: '9:00-10:00am CET' },   // 3:00-4:00am ET (= 9-10 CET)
+  XAU: { start: 500, end: 560, label: '8:20-9:20am ET' },     // 8:20-9:20 ET (COMEX open)
+  OIL: { start: 540, end: 600, label: '9:00-10:00am ET' },    // 9:00-10:00 ET (NYMEX pit)
+};
+
+function getIBWindow(sym) {
+  return IB_WINDOWS[sym] || IB_WINDOWS.ES;
+}
+
+function getIBStatus(sym) {
+  const mins = getESTMins();
+  const ib = getIBWindow(sym);
+  if (mins < ib.start) return 'IB Not Started';
+  if (mins < ib.end) return 'IB Forming...';
+  return 'IB SET';
+}
+
+function getCurrentSession(sym) {
+  const mins = getESTMins();
+  const ib = getIBWindow(sym || 'ES');
+  if (mins >= ib.start && mins < ib.end) return `IB (${ib.label})`;
   if (mins >= 570 && mins < 630) return 'NY DRF (10:00am)';
   if (mins >= 930 && mins < 970) return 'NY Close (4:00pm)';
-  if (mins >= 540 && mins < 570) return 'Post-IB';
+  if (mins >= ib.end && mins < 570) return 'Post-IB';
   if (mins >= 630 && mins < 930) return 'NY Mid-Day';
-  if (mins < 480) return 'Pre-Market';
+  if (mins < ib.start) return 'Pre-Market';
   return 'After Hours';
 }
 
@@ -662,7 +685,7 @@ RULES:
 - If no playbook qualifies → NO TRADE
 - Countertrend trades ALWAYS closed at end of session
 - 1R = D1 14-period ATR
-- IB = 8:00-9:00am EST
+- IB window varies by instrument: ES/NQ 9:30-10:30am ET · DAX 9:00-10:00am CET · Gold 8:20-9:20am ET · Oil 9:00-10:00am ET
 - Active sessions: NY DRF 10am EST · NY Close 4pm EST
 - VA = TPO-based, previous day RTH 9:30am-4pm EST, 30-min periods
 - Conterminous tolerance: within 5-10 ticks / 1-2 points
@@ -759,7 +782,8 @@ app.get('/api/autosignal', async (req, res) => {
 
       if (dateStr === todayStr) {
         todayBars.push(bar);
-        if (hhmm >= 480 && hhmm < 540) todayIBBars.push(bar); // 8:00-9:00 IB
+        const ib = getIBWindow(sym);
+        if (hhmm >= ib.start && hhmm < ib.end) todayIBBars.push(bar);
         todayM30Bars.push(bar);
       } else if (hhmm >= 570 && hhmm < 960) {
         // RTH: 9:30 (570min) to 16:00 (960min)
@@ -810,13 +834,15 @@ app.get('/api/autosignal', async (req, res) => {
     if (ibHigh && currentPrice > ibHigh) ibExtension = 'UP';
     else if (ibLow && currentPrice < ibLow) ibExtension = 'DOWN';
 
-    const session = getCurrentSession();
+    const session = getCurrentSession(sym);
+    const ibStatus = getIBStatus(sym);
+    const ibWindow = getIBWindow(sym);
 
     // ── Data object to return + send to AI ──
     const dataUsed = {
       vah: va.vah, val: va.val, poc: va.poc,
       atr: atr14, adr: adr20,
-      ib_high: ibHigh, ib_low: ibLow,
+      ib_high: ibHigh, ib_low: ibLow, ib_status: ibStatus, ib_window: ibWindow.label,
       current_price: +currentPrice.toFixed(2),
       trend, va_open: vaOpen,
       m30_pattern: m30Pattern,
@@ -849,7 +875,7 @@ VALUE AREA (TPO-based, yesterday RTH 30min bars, ${yesterdayRTH.length} periods)
 QUARTERLY PIVOTS (D1):
 - QP: ${dataUsed.d1_qp} | QHi: ${dataUsed.d1_qhi} | QMid: ${dataUsed.d1_qmid} | QLo: ${dataUsed.d1_qlo}
 
-INITIAL BALANCE (8:00-9:00am EST):
+INITIAL BALANCE (${dataUsed.ib_window} — ${dataUsed.ib_status}):
 - IB High: ${dataUsed.ib_high || 'Not yet formed'}
 - IB Low: ${dataUsed.ib_low || 'Not yet formed'}
 - IB Extension: ${dataUsed.ib_extension}

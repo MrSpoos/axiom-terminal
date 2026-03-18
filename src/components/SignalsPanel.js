@@ -16,9 +16,19 @@ function useNYTime() {
   return { ny, h, m, mins };
 }
 
-function getSessionStatus(mins) {
-  // IB: 8:00–9:00 EST (480–540)
-  const ibActive = mins >= 480 && mins < 540;
+// IB windows per instrument (all in ET minutes-since-midnight)
+const IB_WINDOWS = {
+  ES:  { start: 570, end: 630, label: "IB 9:30-10:30a ET" },
+  NQ:  { start: 570, end: 630, label: "IB 9:30-10:30a ET" },
+  DAX: { start: 180, end: 240, label: "IB 9-10a CET" },
+  XAU: { start: 500, end: 560, label: "IB 8:20-9:20a ET" },
+  OIL: { start: 540, end: 600, label: "IB 9-10a ET" },
+};
+
+function getSessionStatus(mins, instrument) {
+  const ib = IB_WINDOWS[instrument] || IB_WINDOWS.ES;
+  const ibActive = mins >= ib.start && mins < ib.end;
+  const ibPre = mins < ib.start;
   // DRF: 10:00 EST (600) — amber if within 30min (570–600), green at 600–610
   const drfAt = mins >= 600 && mins < 610;
   const drfNear = mins >= 570 && mins < 600;
@@ -28,22 +38,23 @@ function getSessionStatus(mins) {
 
   let banner = "";
   let bannerColor = "#334155";
-  if (ibActive) { banner = "IB OPEN"; bannerColor = "#00d4aa"; }
+  if (ibActive) { banner = "IB FORMING"; bannerColor = "#00d4aa"; }
   else if (drfAt) { banner = "DRF WINDOW"; bannerColor = "#00d4aa"; }
   else if (drfNear) { banner = "DRF APPROACHING"; bannerColor = "#f6c90e"; }
   else if (closeAt) { banner = "NY CLOSE WINDOW"; bannerColor = "#00d4aa"; }
   else if (closeNear) { banner = "NY CLOSE APPROACHING"; bannerColor = "#f6c90e"; }
-  else if (mins < 480) { banner = "PRE-MARKET"; bannerColor = "#475569"; }
+  else if (ibPre) { banner = "IB NOT STARTED"; bannerColor = "#475569"; }
   else if (mins >= 970) { banner = "AFTER HOURS"; bannerColor = "#475569"; }
-  else { banner = "IB CLOSED"; bannerColor = "#475569"; }
+  else if (mins >= ib.end) { banner = "IB SET"; bannerColor = "#94a3b8"; }
+  else { banner = "PRE-MARKET"; bannerColor = "#475569"; }
 
-  return { ibActive, drfAt, drfNear, closeAt, closeNear, banner, bannerColor };
+  return { ibActive, ibLabel: ib.label, drfAt, drfNear, closeAt, closeNear, banner, bannerColor };
 }
 
 // ── SESSION CLOCK COMPONENT ──────────────────────────────────────────────────
-function SessionClock() {
+function SessionClock({ instrument = "ES" }) {
   const { ny, mins } = useNYTime();
-  const sess = getSessionStatus(mins);
+  const sess = getSessionStatus(mins, instrument);
   const fmt = ny.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
   const dot = (active, near) => active ? "#00d4aa" : near ? "#f6c90e" : "#334155";
@@ -52,13 +63,13 @@ function SessionClock() {
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", background: "rgba(0,0,0,0.3)", borderRadius: 5, border: "1px solid rgba(255,255,255,0.05)", flexWrap: "wrap" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0", fontFamily: MONO }}>{fmt}</span>
-        <span style={{ fontSize: 8, color: "#475569", fontFamily: MONO }}>EST</span>
+        <span style={{ fontSize: 8, color: "#475569", fontFamily: MONO }}>ET</span>
       </div>
       <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
       <div style={{ display: "flex", gap: 8 }}>
-        <span style={{ fontSize: 8, fontFamily: MONO, color: dot(sess.ibActive, false) }}>● IB 8-9a</span>
-        <span style={{ fontSize: 8, fontFamily: MONO, color: dot(sess.drfAt, sess.drfNear) }}>● DRF 10a</span>
-        <span style={{ fontSize: 8, fontFamily: MONO, color: dot(sess.closeAt, sess.closeNear) }}>● CLOSE 4p</span>
+        <span style={{ fontSize: 8, fontFamily: MONO, color: dot(sess.ibActive, false) }}>{"\u25CF"} {sess.ibLabel}</span>
+        <span style={{ fontSize: 8, fontFamily: MONO, color: dot(sess.drfAt, sess.drfNear) }}>{"\u25CF"} DRF 10a</span>
+        <span style={{ fontSize: 8, fontFamily: MONO, color: dot(sess.closeAt, sess.closeNear) }}>{"\u25CF"} CLOSE 4p</span>
       </div>
       <div style={{ width: 1, height: 14, background: "rgba(255,255,255,0.08)" }} />
       <span style={{
@@ -180,7 +191,7 @@ const TREE = {
   va_open_up: {
     id: "va_open_up", step: 1,
     question: "Where did price open relative to Value Area? (TPO-based)",
-    context: "Uptrend context. Compare the open to yesterday's VAH / VAL / POC (TPO-based Value Area — time/Market Profile letters). Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL. An open above VA is strongest for continuation. IB = 8:00-9:00am EST.",
+    context: "Uptrend context. Compare the open to yesterday's VAH / VAL / POC (TPO-based Value Area — time/Market Profile letters). Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL. An open above VA is strongest for continuation. IB varies by instrument: ES/NQ 9:30-10:30 ET, DAX 9-10 CET, Gold 8:20-9:20 ET, Oil 9-10 ET.",
     options: [
       { label: "Above VA", value: "above_va", next: "pb1_up_setup" },
       { label: "Inside VA", value: "inside_va", next: "pb2_up_setup" },
@@ -192,7 +203,7 @@ const TREE = {
   va_open_down: {
     id: "va_open_down", step: 1,
     question: "Where did price open relative to Value Area? (TPO-based)",
-    context: "Downtrend context. TPO-based Value Area (time/Market Profile letters). Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL. An open below VA is strongest for short continuation. IB = 8:00-9:00am EST.",
+    context: "Downtrend context. TPO-based Value Area (time/Market Profile letters). Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL. An open below VA is strongest for short continuation. IB varies by instrument: ES/NQ 9:30-10:30 ET, DAX 9-10 CET, Gold 8:20-9:20 ET, Oil 9-10 ET.",
     options: [
       { label: "Below VA", value: "below_va", next: "pb1_down_setup" },
       { label: "Inside VA", value: "inside_va", next: "pb2_down_setup" },
@@ -204,7 +215,7 @@ const TREE = {
   va_open_range: {
     id: "va_open_range", step: 1,
     question: "Where did price open relative to Value Area? (TPO-based)",
-    context: "Range / chop context. TPO-based Value Area (time/Market Profile letters). Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL. Look for mean-reversion plays back to POC or VA edges. IB = 8:00-9:00am EST.",
+    context: "Range / chop context. TPO-based Value Area (time/Market Profile letters). Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL. Look for mean-reversion plays back to POC or VA edges. IB varies by instrument: ES/NQ 9:30-10:30 ET, DAX 9-10 CET, Gold 8:20-9:20 ET, Oil 9-10 ET.",
     options: [
       { label: "Above VA (fade short)", value: "above_va", next: "pb3_range_short" },
       { label: "Inside VA (wait)", value: "inside_va", next: "signal_no_trade_range" },
@@ -362,7 +373,7 @@ const TREE = {
   pb3_ct_long_entry: {
     id: "pb3_ct_long_entry", step: 3,
     question: "PB3 — CT Intraday Long: Phase 1 trigger?",
-    context: "ADR exhausted to the downside (20-day True Range ADR). Phase 1 trigger: Bullish engulf OR consolidation breaking above swing high on M15/M30/H4. Also look for: hammer/doji at support, volume climax + absorption, delta divergence. Countertrend — size down 50%. IB = 8:00-9:00am EST.",
+    context: "ADR exhausted to the downside (20-day True Range ADR). Phase 1 trigger: Bullish engulf OR consolidation breaking above swing high on M15/M30/H4. Also look for: hammer/doji at support, volume climax + absorption, delta divergence. Countertrend — size down 50%. IB varies by instrument: ES/NQ 9:30-10:30 ET, DAX 9-10 CET, Gold 8:20-9:20 ET, Oil 9-10 ET.",
     options: [
       { label: "Phase 1 confirmed — volume + candle", value: "confirmed", next: "pb3_ct_long_rr" },
       { label: "No clear reversal signal", value: "no", next: "signal_no_trade_noconfirm" },
@@ -381,7 +392,7 @@ const TREE = {
   pb3_ct_short_entry: {
     id: "pb3_ct_short_entry", step: 3,
     question: "PB3 — CT Intraday Short: Phase 3 trigger?",
-    context: "ADR exhausted to the upside (20-day True Range ADR). Phase 3 trigger: 3-bar reversal pattern (bearish) on M15/M30/H4. Also look for: shooting star at resistance, volume climax + absorption, delta divergence. Countertrend — size down 50%. IB = 8:00-9:00am EST.",
+    context: "ADR exhausted to the upside (20-day True Range ADR). Phase 3 trigger: 3-bar reversal pattern (bearish) on M15/M30/H4. Also look for: shooting star at resistance, volume climax + absorption, delta divergence. Countertrend — size down 50%. IB varies by instrument: ES/NQ 9:30-10:30 ET, DAX 9-10 CET, Gold 8:20-9:20 ET, Oil 9-10 ET.",
     options: [
       { label: "Phase 3 confirmed — volume + candle", value: "confirmed", next: "pb3_ct_short_rr" },
       { label: "No clear reversal signal", value: "no", next: "signal_no_trade_noconfirm" },
@@ -620,7 +631,7 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
           {[
             ["VAH", dataUsed.vah], ["VAL", dataUsed.val], ["POC", dataUsed.poc],
             ["ATR", dataUsed.atr], ["ADR", dataUsed.adr],
-            ["IB Hi", dataUsed.ib_high], ["IB Lo", dataUsed.ib_low],
+            ["IB Hi", dataUsed.ib_high], ["IB Lo", dataUsed.ib_low], ["IB", dataUsed.ib_status || dataUsed.ib_window],
             ["Trend", dataUsed.trend], ["Pattern", dataUsed.m30_pattern],
             ["Session", dataUsed.session],
           ].map(([k, v]) => (
@@ -853,7 +864,7 @@ function AISignalAnalyser() {
       </div>
 
       {/* IB */}
-      <div style={sectionStyle}>INITIAL BALANCE (8:00-9:00 EST)</div>
+      <div style={sectionStyle}>INITIAL BALANCE (per instrument)</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
         <div><div style={labelStyle}>IB HIGH</div><input style={inputStyle} value={form.ibHigh} onChange={e => set("ibHigh", e.target.value)} /></div>
         <div><div style={labelStyle}>IB LOW</div><input style={inputStyle} value={form.ibLow} onChange={e => set("ibLow", e.target.value)} /></div>
@@ -1135,7 +1146,7 @@ export default function SignalsPanel() {
       </div>
 
       {/* Session Clock */}
-      <SessionClock />
+      <SessionClock instrument={selectedInstrument} />
 
       {/* Mode toggle */}
       <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
