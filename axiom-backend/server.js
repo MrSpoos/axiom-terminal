@@ -332,6 +332,14 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ── ERROR HANDLER ─────────────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err.message);
+  if (!res.headersSent) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Axiom Backend running on port ${PORT}`);
   console.log(`   /api/news    — Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
