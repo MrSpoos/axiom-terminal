@@ -508,11 +508,286 @@ const TREE = {
   signal_no_trade_range:     { id: "signal_no_trade_range",     step: 6, signal: "NO TRADE", color: "#475569", label: "NO TRADE \u2014 INSIDE VA RANGE", summary: "Range market, opened inside VA (TPO). No edge. Wait for price to reach VA extremes." },
 };
 
-// ── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function SignalsPanel() {
+// ── AI SIGNAL ANALYSER ───────────────────────────────────────────────────────
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
+
+const PLAYBOOK_NAMES = {
+  PB1: "PLAYBOOK #1 \u2014 WITH THE TREND",
+  PB2: "PLAYBOOK #2 \u2014 RETURN TO VA",
+  PB3: "PLAYBOOK #3 \u2014 CT ADR EXHAUSTION",
+  PB4: "PLAYBOOK #4 \u2014 CT SWING",
+  "NO TRADE": "NO TRADE",
+};
+
+const SIGNAL_COLORS = { LONG: "#00d4aa", SHORT: "#ff4d6d", "CT LONG": "#f6c90e", "CT SHORT": "#f6c90e", "SWING LONG": "#4a9eff", "SWING SHORT": "#4a9eff", "NO TRADE": "#475569" };
+
+function AISignalAnalyser() {
+  const [form, setForm] = useState({
+    instrument: "ES", currentPrice: "", atr: "",
+    vah: "", val: "",
+    d1QP: "", d1QHi: "", d1QMid: "", d1QLo: "",
+    h4QP: "", h4QHi: "", h4QMid: "", h4QLo: "",
+    ibHigh: "", ibLow: "",
+    trend: "UP", vaOpen: "Above VAH",
+    m30Pattern: "None", adrExhausted: false,
+  });
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [fetchingATR, setFetchingATR] = useState(false);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const fetchATR = useCallback(async () => {
+    setFetchingATR(true);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/market`);
+      const d = await r.json();
+      if (d.success && d.data) {
+        const sym = form.instrument === "XAU" ? "GLD" : form.instrument === "OIL" ? "USO" : form.instrument;
+        // Try to get price from ES/NQ futures or ETFs
+        if (sym === "ES" && d.data.es) {
+          set("currentPrice", String(d.data.es.price));
+        } else if (sym === "NQ" && d.data.nq) {
+          set("currentPrice", String(d.data.nq.price));
+        } else {
+          const etf = (d.data.etfs || []).find(e => e.sym === sym);
+          if (etf && etf.price) set("currentPrice", String(etf.price));
+        }
+      }
+    } catch (e) { console.warn("Fetch ATR failed:", e.message); }
+    setFetchingATR(false);
+  }, [form.instrument]);
+
+  const analyse = useCallback(async () => {
+    if (!form.currentPrice) { setError("Current price is required"); return; }
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/signals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (d.success && d.signal) {
+        setResult({ ...d.signal, ts: d.ts });
+      } else {
+        throw new Error("Invalid response from AI");
+      }
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [form]);
+
+  const inputStyle = {
+    background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 3, padding: "4px 6px", color: "#e2e8f0", fontSize: 10,
+    fontFamily: MONO, outline: "none", width: "100%",
+  };
+  const labelStyle = { fontSize: 7, color: "#475569", fontFamily: MONO, letterSpacing: "0.06em", marginBottom: 1 };
+  const sectionStyle = { fontSize: 8, fontWeight: 700, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginTop: 6, marginBottom: 4 };
+
+  const sigColor = result ? (SIGNAL_COLORS[result.signal] || "#475569") : "#475569";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#4a9eff", fontFamily: MONO, letterSpacing: "0.1em" }}>
+          AI SIGNAL ANALYSER
+        </div>
+        <span style={{ fontSize: 7, color: "#334155", fontFamily: MONO }}>POWERED BY CLAUDE</span>
+      </div>
+
+      {/* Instrument + Price + ATR row */}
+      <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1fr 1fr 0.7fr", gap: 6 }}>
+        <div>
+          <div style={labelStyle}>INSTRUMENT</div>
+          <select value={form.instrument} onChange={e => set("instrument", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+            {INSTRUMENTS.map(i => <option key={i} value={i}>{i}</option>)}
+          </select>
+        </div>
+        <div>
+          <div style={labelStyle}>CURRENT PRICE</div>
+          <input style={inputStyle} placeholder="e.g. 5420" value={form.currentPrice} onChange={e => set("currentPrice", e.target.value)} />
+        </div>
+        <div>
+          <div style={labelStyle}>D1 ATR (14p/20d)</div>
+          <input style={inputStyle} placeholder="e.g. 45.5" value={form.atr} onChange={e => set("atr", e.target.value)} />
+        </div>
+        <div>
+          <div style={labelStyle}>&nbsp;</div>
+          <button onClick={fetchATR} disabled={fetchingATR} style={{
+            ...inputStyle, cursor: "pointer", textAlign: "center",
+            background: "rgba(74,158,255,0.1)", border: "1px solid rgba(74,158,255,0.25)",
+            color: "#4a9eff", fontWeight: 600,
+          }}>{fetchingATR ? "..." : "FETCH"}</button>
+        </div>
+      </div>
+
+      {/* VA */}
+      <div style={sectionStyle}>VALUE AREA (TPO)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        <div><div style={labelStyle}>VAH</div><input style={inputStyle} placeholder="VAH" value={form.vah} onChange={e => set("vah", e.target.value)} /></div>
+        <div><div style={labelStyle}>VAL</div><input style={inputStyle} placeholder="VAL" value={form.val} onChange={e => set("val", e.target.value)} /></div>
+      </div>
+
+      {/* Quarterly Pivots */}
+      <div style={sectionStyle}>D1 QUARTERLY PIVOTS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6 }}>
+        <div><div style={labelStyle}>QP</div><input style={inputStyle} value={form.d1QP} onChange={e => set("d1QP", e.target.value)} /></div>
+        <div><div style={labelStyle}>QHi</div><input style={inputStyle} value={form.d1QHi} onChange={e => set("d1QHi", e.target.value)} /></div>
+        <div><div style={labelStyle}>QMid</div><input style={inputStyle} value={form.d1QMid} onChange={e => set("d1QMid", e.target.value)} /></div>
+        <div><div style={labelStyle}>QLo</div><input style={inputStyle} value={form.d1QLo} onChange={e => set("d1QLo", e.target.value)} /></div>
+      </div>
+
+      <div style={sectionStyle}>H4 QUARTERLY PIVOTS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6 }}>
+        <div><div style={labelStyle}>QP</div><input style={inputStyle} value={form.h4QP} onChange={e => set("h4QP", e.target.value)} /></div>
+        <div><div style={labelStyle}>QHi</div><input style={inputStyle} value={form.h4QHi} onChange={e => set("h4QHi", e.target.value)} /></div>
+        <div><div style={labelStyle}>QMid</div><input style={inputStyle} value={form.h4QMid} onChange={e => set("h4QMid", e.target.value)} /></div>
+        <div><div style={labelStyle}>QLo</div><input style={inputStyle} value={form.h4QLo} onChange={e => set("h4QLo", e.target.value)} /></div>
+      </div>
+
+      {/* IB */}
+      <div style={sectionStyle}>INITIAL BALANCE (8:00-9:00 EST)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        <div><div style={labelStyle}>IB HIGH</div><input style={inputStyle} value={form.ibHigh} onChange={e => set("ibHigh", e.target.value)} /></div>
+        <div><div style={labelStyle}>IB LOW</div><input style={inputStyle} value={form.ibLow} onChange={e => set("ibLow", e.target.value)} /></div>
+      </div>
+
+      {/* Context dropdowns */}
+      <div style={sectionStyle}>MARKET CONTEXT</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+        <div>
+          <div style={labelStyle}>TREND</div>
+          <select value={form.trend} onChange={e => set("trend", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+            <option value="UP">UP</option>
+            <option value="DOWN">DOWN</option>
+          </select>
+        </div>
+        <div>
+          <div style={labelStyle}>VA OPEN</div>
+          <select value={form.vaOpen} onChange={e => set("vaOpen", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+            <option value="Above VAH">Above VAH</option>
+            <option value="Inside VA">Inside VA</option>
+            <option value="Below VAL">Below VAL</option>
+          </select>
+        </div>
+        <div>
+          <div style={labelStyle}>M30 PATTERN</div>
+          <select value={form.m30Pattern} onChange={e => set("m30Pattern", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+            <option value="None">None</option>
+            <option value="Bull Engulf">Bull Engulf</option>
+            <option value="Bear Engulf">Bear Engulf</option>
+            <option value="Consolidation">Consolidation</option>
+            <option value="3-Bar Reversal">3-Bar Reversal</option>
+          </select>
+        </div>
+      </div>
+
+      {/* ADR toggle */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+        <button onClick={() => set("adrExhausted", !form.adrExhausted)} style={{
+          fontSize: 9, fontFamily: MONO, fontWeight: 600, padding: "4px 12px",
+          borderRadius: 4, cursor: "pointer",
+          background: form.adrExhausted ? "rgba(246,201,14,0.15)" : "rgba(255,255,255,0.04)",
+          border: `1px solid ${form.adrExhausted ? "rgba(246,201,14,0.4)" : "rgba(255,255,255,0.08)"}`,
+          color: form.adrExhausted ? "#f6c90e" : "#475569",
+        }}>{form.adrExhausted ? "\u2713 ADR EXHAUSTED" : "ADR EXHAUSTED?"}</button>
+        <span style={{ fontSize: 7, color: "#334155", fontFamily: MONO }}>\u2265 80% of 20-day TR</span>
+      </div>
+
+      {/* Analyse button */}
+      <button onClick={analyse} disabled={loading} style={{
+        marginTop: 4, padding: "8px 0", fontSize: 11, fontWeight: 700,
+        fontFamily: MONO, letterSpacing: "0.1em",
+        background: loading ? "rgba(74,158,255,0.05)" : "rgba(74,158,255,0.15)",
+        border: "1px solid rgba(74,158,255,0.3)", borderRadius: 5,
+        color: "#4a9eff", cursor: loading ? "default" : "pointer",
+      }}>{loading ? "ANALYSING..." : "ANALYSE SIGNAL"}</button>
+
+      {error && (
+        <div style={{ fontSize: 9, color: "#ff4d6d", fontFamily: MONO, padding: "6px 8px", background: "rgba(255,77,109,0.1)", borderRadius: 4 }}>
+          ERROR: {error}
+        </div>
+      )}
+
+      {/* AI Result Card */}
+      {result && (
+        <div style={{ background: "rgba(0,0,0,0.4)", border: `2px solid ${sigColor}`, borderRadius: 8, padding: 14 }}>
+          {/* Signal + Playbook badges */}
+          <div style={{ textAlign: "center", marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 6 }}>
+              <span style={{ fontSize: 8, fontFamily: MONO, color: "#475569", padding: "1px 6px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>{form.instrument}</span>
+              <span style={{ fontSize: 8, fontFamily: MONO, color: sigColor, padding: "1px 6px", background: sigColor + "15", borderRadius: 3 }}>
+                {result.direction || ""}
+              </span>
+              {result.target_r && result.target_r !== "None" && (
+                <span style={{ fontSize: 8, fontFamily: MONO, color: "#00d4aa", padding: "1px 6px", background: "rgba(0,212,170,0.1)", borderRadius: 3 }}>
+                  {result.target_r}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: sigColor, fontFamily: MONO, marginBottom: 2 }}>
+              {result.signal}
+            </div>
+            <div style={{ fontSize: 9, fontWeight: 600, color: "#94a3b8", fontFamily: MONO, letterSpacing: "0.08em" }}>
+              {PLAYBOOK_NAMES[result.playbook] || result.playbook}
+            </div>
+          </div>
+
+          {/* R target prices */}
+          {result.stop && (
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
+              <LevelPill label="STOP" value={Number(result.stop).toFixed(2)} color="#ff4d6d" />
+              {result.target_1 && <LevelPill label="1R" value={Number(result.target_1).toFixed(2)} color="#f6c90e" />}
+              {result.target_2 && <LevelPill label="2R" value={Number(result.target_2).toFixed(2)} color="#00d4aa" />}
+              {result.target_3 && <LevelPill label="3R" value={Number(result.target_3).toFixed(2)} color="#4a9eff" />}
+            </div>
+          )}
+
+          {/* Criteria checklist */}
+          {result.criteria && result.criteria.length > 0 && (
+            <div style={{ marginBottom: 10, background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: 8 }}>
+              <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>CRITERIA CHECK</div>
+              {result.criteria.map((c, i) => (
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", gap: 6, fontSize: 9, fontFamily: MONO,
+                  padding: "2px 0",
+                  borderBottom: i < result.criteria.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none",
+                }}>
+                  <span style={{ color: c.met ? "#00d4aa" : "#ff4d6d", fontSize: 10, minWidth: 14 }}>
+                    {c.met ? "\u2713" : "\u2717"}
+                  </span>
+                  <span style={{ color: c.met ? "#94a3b8" : "#64748b" }}>{c.condition}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Reasoning */}
+          {result.reasoning && (
+            <div style={{ fontSize: 9, color: "#64748b", fontFamily: MONO, lineHeight: 1.6, background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: 8 }}>
+              {result.reasoning}
+            </div>
+          )}
+
+          {/* Timestamp */}
+          {result.ts && (
+            <div style={{ fontSize: 7, color: "#1e293b", fontFamily: MONO, marginTop: 6, textAlign: "right" }}>
+              {new Date(result.ts).toLocaleTimeString()} EST
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MANUAL DECISION TREE COMPONENT ───────────────────────────────────────────
+function ManualDecisionTree({ selectedInstrument }) {
   const [currentId, setCurrentId] = useState("start");
   const [history, setHistory] = useState([]);
-  const [selectedInstrument, setSelectedInstrument] = useState("ES");
 
   const node = TREE[currentId];
   const isSignal = node.step === 6;
@@ -522,10 +797,7 @@ export default function SignalsPanel() {
     setCurrentId(option.next);
   }, [node]);
 
-  const reset = useCallback(() => {
-    setCurrentId("start");
-    setHistory([]);
-  }, []);
+  const reset = useCallback(() => { setCurrentId("start"); setHistory([]); }, []);
 
   const goBack = useCallback(() => {
     if (history.length === 0) return;
@@ -535,6 +807,103 @@ export default function SignalsPanel() {
   }, [history]);
 
   const activeStep = isSignal ? STEPS.length - 1 : node.step;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Breadcrumb */}
+      <div style={{ display: "flex", alignItems: "center", gap: 0, padding: "0 4px" }}>
+        {STEPS.map((s, i) => {
+          const done = i < activeStep;
+          const active = i === activeStep;
+          return (
+            <div key={s} style={{ display: "flex", alignItems: "center", flex: 1 }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: "50%",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 8, fontWeight: 700, fontFamily: MONO,
+                  background: done ? "rgba(0,212,170,0.2)" : active ? "rgba(74,158,255,0.25)" : "rgba(255,255,255,0.05)",
+                  color: done ? "#00d4aa" : active ? "#4a9eff" : "#334155",
+                  border: `1px solid ${done ? "rgba(0,212,170,0.3)" : active ? "rgba(74,158,255,0.4)" : "rgba(255,255,255,0.08)"}`,
+                }}>
+                  {done ? "\u2713" : i + 1}
+                </div>
+                <span style={{ fontSize: 7, marginTop: 2, fontFamily: MONO, color: done ? "#00d4aa" : active ? "#4a9eff" : "#334155", letterSpacing: "0.05em" }}>{s}</span>
+              </div>
+              {i < STEPS.length - 1 && (
+                <div style={{ height: 1, flex: 1, minWidth: 8, background: done ? "rgba(0,212,170,0.3)" : "rgba(255,255,255,0.06)", marginBottom: 10 }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Question or Signal */}
+      {!isSignal ? (
+        <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(74,158,255,0.15)", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0", fontFamily: MONO, marginBottom: 6 }}>{node.question}</div>
+          <div style={{ fontSize: 9, color: "#64748b", fontFamily: MONO, lineHeight: 1.5, marginBottom: 12 }}>{node.context}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {node.options.map((opt) => (
+              <button key={opt.value} onClick={() => handleAnswer(opt)} style={{
+                background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.2)",
+                borderRadius: 4, padding: "8px 12px", color: "#e2e8f0", fontSize: 10,
+                fontFamily: MONO, cursor: "pointer", textAlign: "left", transition: "all 0.15s",
+              }}
+              onMouseEnter={e => { e.target.style.background = "rgba(74,158,255,0.18)"; e.target.style.borderColor = "rgba(74,158,255,0.4)"; }}
+              onMouseLeave={e => { e.target.style.background = "rgba(74,158,255,0.08)"; e.target.style.borderColor = "rgba(74,158,255,0.2)"; }}
+              >{opt.label}</button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: "rgba(0,0,0,0.4)", border: `2px solid ${node.color}`, borderRadius: 8, padding: 18, textAlign: "center" }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 6 }}>
+            <span style={{ fontSize: 8, fontFamily: MONO, color: "#475569", padding: "1px 6px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>{selectedInstrument}</span>
+            <span style={{ fontSize: 8, fontFamily: MONO, color: node.color, padding: "1px 6px", background: node.color + "15", borderRadius: 3 }}>SIGNAL</span>
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: node.color, fontFamily: MONO, marginBottom: 4 }}>{node.signal}</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#e2e8f0", fontFamily: MONO, marginBottom: 10, letterSpacing: "0.06em" }}>{node.label}</div>
+          <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: MONO, lineHeight: 1.6, textAlign: "left", background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 10 }}>{node.summary}</div>
+        </div>
+      )}
+
+      {/* History log */}
+      {history.length > 0 && (
+        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: 8, border: "1px solid rgba(255,255,255,0.04)" }}>
+          <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>DECISION LOG</div>
+          {history.map((h, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, fontSize: 9, fontFamily: MONO, padding: "3px 0", borderBottom: i < history.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none" }}>
+              <span style={{ color: "#334155", minWidth: 14 }}>{i + 1}.</span>
+              <span style={{ color: "#475569" }}>{h.question}</span>
+              <span style={{ color: "#4a9eff", marginLeft: "auto", whiteSpace: "nowrap" }}>{h.answer}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Bottom controls */}
+      <div style={{ display: "flex", gap: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+        {history.length > 0 && !isSignal && (
+          <button onClick={goBack} style={{ flex: 1, padding: "6px 0", fontSize: 9, fontFamily: MONO, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "#94a3b8", cursor: "pointer" }}>
+            \u2190 BACK
+          </button>
+        )}
+        <button onClick={reset} style={{
+          flex: 1, padding: "6px 0", fontSize: 9, fontFamily: MONO, fontWeight: 700, letterSpacing: "0.08em",
+          background: isSignal ? `${node.color}22` : "rgba(255,77,109,0.1)",
+          border: `1px solid ${isSignal ? node.color + "44" : "rgba(255,77,109,0.2)"}`,
+          borderRadius: 4, color: isSignal ? node.color : "#ff4d6d", cursor: "pointer",
+        }}>{isSignal ? "\u21BB NEW SIGNAL" : "\u21BB RESET"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN COMPONENT ───────────────────────────────────────────────────────────
+export default function SignalsPanel() {
+  const [mode, setMode] = useState("ai"); // "ai" | "manual"
+  const [selectedInstrument, setSelectedInstrument] = useState("ES");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
@@ -564,168 +933,24 @@ export default function SignalsPanel() {
       {/* Session Clock */}
       <SessionClock />
 
-      {/* ATR Calculator */}
-      <ATRCalculator />
-
-      {/* Breadcrumb */}
-      <div style={{ display: "flex", alignItems: "center", gap: 0, padding: "0 4px" }}>
-        {STEPS.map((s, i) => {
-          const done = i < activeStep;
-          const active = i === activeStep;
-          return (
-            <div key={s} style={{ display: "flex", alignItems: "center", flex: 1 }}>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
-                <div style={{
-                  width: 18, height: 18, borderRadius: "50%",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 8, fontWeight: 700, fontFamily: MONO,
-                  background: done ? "rgba(0,212,170,0.2)" : active ? "rgba(74,158,255,0.25)" : "rgba(255,255,255,0.05)",
-                  color: done ? "#00d4aa" : active ? "#4a9eff" : "#334155",
-                  border: `1px solid ${done ? "rgba(0,212,170,0.3)" : active ? "rgba(74,158,255,0.4)" : "rgba(255,255,255,0.08)"}`,
-                }}>
-                  {done ? "\u2713" : i + 1}
-                </div>
-                <span style={{
-                  fontSize: 7, marginTop: 2, fontFamily: MONO,
-                  color: done ? "#00d4aa" : active ? "#4a9eff" : "#334155",
-                  letterSpacing: "0.05em",
-                }}>{s}</span>
-              </div>
-              {i < STEPS.length - 1 && (
-                <div style={{
-                  height: 1, flex: 1, minWidth: 8,
-                  background: done ? "rgba(0,212,170,0.3)" : "rgba(255,255,255,0.06)",
-                  marginBottom: 10,
-                }} />
-              )}
-            </div>
-          );
-        })}
+      {/* Mode toggle: AI Analyser / Manual Tree / ATR Calc */}
+      <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
+        {[["ai", "AI ANALYSER"], ["manual", "MANUAL TREE"], ["calc", "ATR CALC"]].map(([k, label]) => (
+          <button key={k} onClick={() => setMode(k)} style={{
+            flex: 1, padding: "5px 0", fontSize: 8, fontWeight: 700,
+            fontFamily: MONO, letterSpacing: "0.08em", borderRadius: 3,
+            cursor: "pointer", border: "none",
+            background: mode === k ? "rgba(74,158,255,0.2)" : "transparent",
+            color: mode === k ? "#4a9eff" : "#475569",
+          }}>{label}</button>
+        ))}
       </div>
 
-      {/* Main content area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, minHeight: 0, overflow: "auto" }}>
-        {!isSignal ? (
-          /* Question Card */
-          <div style={{
-            background: "rgba(0,0,0,0.3)", border: "1px solid rgba(74,158,255,0.15)",
-            borderRadius: 6, padding: 14,
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0", fontFamily: MONO, marginBottom: 6 }}>
-              {node.question}
-            </div>
-            <div style={{ fontSize: 9, color: "#64748b", fontFamily: MONO, lineHeight: 1.5, marginBottom: 12 }}>
-              {node.context}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {node.options.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => handleAnswer(opt)}
-                  style={{
-                    background: "rgba(74,158,255,0.08)",
-                    border: "1px solid rgba(74,158,255,0.2)",
-                    borderRadius: 4, padding: "8px 12px",
-                    color: "#e2e8f0", fontSize: 10,
-                    fontFamily: MONO,
-                    cursor: "pointer", textAlign: "left",
-                    transition: "all 0.15s",
-                  }}
-                  onMouseEnter={e => { e.target.style.background = "rgba(74,158,255,0.18)"; e.target.style.borderColor = "rgba(74,158,255,0.4)"; }}
-                  onMouseLeave={e => { e.target.style.background = "rgba(74,158,255,0.08)"; e.target.style.borderColor = "rgba(74,158,255,0.2)"; }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          /* Signal Result Card */
-          <div style={{
-            background: "rgba(0,0,0,0.4)",
-            border: `2px solid ${node.color}`,
-            borderRadius: 8, padding: 18, textAlign: "center",
-          }}>
-            <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 6 }}>
-              <span style={{ fontSize: 8, fontFamily: MONO, color: "#475569", padding: "1px 6px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>{selectedInstrument}</span>
-              <span style={{ fontSize: 8, fontFamily: MONO, color: node.color, padding: "1px 6px", background: node.color + "15", borderRadius: 3 }}>SIGNAL</span>
-            </div>
-            <div style={{
-              fontSize: 20, fontWeight: 700, color: node.color,
-              fontFamily: MONO, marginBottom: 4,
-            }}>
-              {node.signal}
-            </div>
-            <div style={{
-              fontSize: 10, fontWeight: 600, color: "#e2e8f0",
-              fontFamily: MONO, marginBottom: 10,
-              letterSpacing: "0.06em",
-            }}>
-              {node.label}
-            </div>
-            <div style={{
-              fontSize: 9, color: "#94a3b8", fontFamily: MONO,
-              lineHeight: 1.6, textAlign: "left",
-              background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 10,
-            }}>
-              {node.summary}
-            </div>
-          </div>
-        )}
-
-        {/* History log */}
-        {history.length > 0 && (
-          <div style={{
-            background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: 8,
-            border: "1px solid rgba(255,255,255,0.04)",
-          }}>
-            <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>
-              DECISION LOG
-            </div>
-            {history.map((h, i) => (
-              <div key={i} style={{
-                display: "flex", gap: 6, fontSize: 9,
-                fontFamily: MONO,
-                padding: "3px 0",
-                borderBottom: i < history.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none",
-              }}>
-                <span style={{ color: "#334155", minWidth: 14 }}>{i + 1}.</span>
-                <span style={{ color: "#475569" }}>{h.question}</span>
-                <span style={{ color: "#4a9eff", marginLeft: "auto", whiteSpace: "nowrap" }}>{h.answer}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Bottom controls */}
-      <div style={{
-        display: "flex", gap: 8, paddingTop: 8,
-        borderTop: "1px solid rgba(255,255,255,0.06)",
-      }}>
-        {history.length > 0 && !isSignal && (
-          <button onClick={goBack} style={{
-            flex: 1, padding: "6px 0", fontSize: 9,
-            fontFamily: MONO,
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 4, color: "#94a3b8", cursor: "pointer",
-          }}>
-            \u2190 BACK
-          </button>
-        )}
-        <button onClick={reset} style={{
-          flex: 1, padding: "6px 0", fontSize: 9,
-          fontFamily: MONO,
-          fontWeight: 700, letterSpacing: "0.08em",
-          background: isSignal ? `${node.color}22` : "rgba(255,77,109,0.1)",
-          border: `1px solid ${isSignal ? node.color + "44" : "rgba(255,77,109,0.2)"}`,
-          borderRadius: 4,
-          color: isSignal ? node.color : "#ff4d6d",
-          cursor: "pointer",
-        }}>
-          {isSignal ? "\u21BB NEW SIGNAL" : "\u21BB RESET"}
-        </button>
+      {/* Content area */}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+        {mode === "ai" && <AISignalAnalyser />}
+        {mode === "calc" && <ATRCalculator />}
+        {mode === "manual" && <ManualDecisionTree selectedInstrument={selectedInstrument} />}
       </div>
     </div>
   );
