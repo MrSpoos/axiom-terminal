@@ -23,7 +23,7 @@ app.get('/health', (req, res) => {
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const rss = new RSSParser({
   timeout: 10000,
@@ -508,6 +508,128 @@ Calculate stop and targets using the ATR value provided. Apply the playbook rule
   }
 });
 
+// ── /api/analyse-chart — Chart Screenshot Analyser (Vision) ──────────────────
+const CHART_ANALYSIS_SYSTEM = `You are an Axiom Edge chart analysis engine. You extract trading levels from chart screenshots. The user will upload a screenshot from any charting platform (TradingView, Deepcharts, Sierra Chart, NinjaTrader, ThinkOrSwim, etc.).
+
+Your job is to identify and extract ALL visible levels from the chart image:
+
+EXTRACT THESE LEVELS (return null if not visible):
+- current_price: The last traded price or most recent candle close
+- vah: Value Area High (from TPO/Market Profile or volume profile)
+- val: Value Area Low
+- poc: Point of Control (highest volume node)
+- ib_high: Initial Balance High (first hour of session)
+- ib_low: Initial Balance Low
+- d1_qp: Daily Quarterly Pivot
+- d1_qhi: Daily Q High
+- d1_qmid: Daily Q Mid
+- d1_qlo: Daily Q Low
+- h4_qp: H4 Quarterly Pivot
+- h4_qhi, h4_qmid, h4_qlo: H4 Q levels
+
+ALSO DETERMINE:
+- trend: UP/DOWN/NEUTRAL based on price position vs key levels, moving averages, or structure
+- va_open: "Above VAH" / "Inside VA" / "Below VAL" based on where price opened relative to VA
+- m30_pattern: Look for Bull Engulf, Bear Engulf, 3-Bar Reversal, Consolidation, or None
+- adr_exhausted: true if price appears near daily range extremes
+- session: What session appears active based on any timestamps/time axis visible
+
+IB windows by instrument:
+- ES/NQ: 9:30-10:30am ET · DAX: 9:00-10:00am CET · Gold: 8:20-9:20am ET · Oil: 9:00-10:00am ET
+
+Look for:
+- Price labels on the Y-axis
+- Horizontal lines with labels (VAH, VAL, POC, pivot levels)
+- Volume profile / TPO profile histograms
+- Time axis to determine session
+- Candlestick patterns on M30/H1 timeframes
+- Any text labels, annotations, or level markers
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "instrument": "<detected or provided>",
+  "current_price": <number or null>,
+  "vah": <number or null>,
+  "val": <number or null>,
+  "poc": <number or null>,
+  "ib_high": <number or null>,
+  "ib_low": <number or null>,
+  "d1_qp": <number or null>,
+  "d1_qhi": <number or null>,
+  "d1_qmid": <number or null>,
+  "d1_qlo": <number or null>,
+  "h4_qp": <number or null>,
+  "h4_qhi": <number or null>,
+  "h4_qmid": <number or null>,
+  "h4_qlo": <number or null>,
+  "trend": "UP" or "DOWN" or "NEUTRAL",
+  "va_open": "Above VAH" or "Inside VA" or "Below VAL",
+  "m30_pattern": "Bull Engulf" or "Bear Engulf" or "3-Bar Reversal" or "Consolidation" or "None",
+  "adr_exhausted": true or false,
+  "confidence": "high" or "medium" or "low",
+  "notes": "<2-3 sentences explaining what you could see and what you estimated>"
+}`;
+
+app.post('/api/analyse-chart', async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
+
+  const { image, instrument } = req.body;
+  if (!image) return res.status(400).json({ error: 'image (base64) is required' });
+
+  // Extract media type and base64 data
+  let mediaType = 'image/png';
+  let base64Data = image;
+  if (image.startsWith('data:')) {
+    const match = image.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (match) { mediaType = match[1]; base64Data = match[2]; }
+  }
+
+  try {
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1500,
+        system: `Today's date is ${todayDateStr()}.\n\n${CHART_ANALYSIS_SYSTEM}`,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Data } },
+            { type: 'text', text: `Analyse this chart screenshot. Instrument: ${instrument || 'detect from chart'}. Extract all visible trading levels. Return JSON only.` },
+          ],
+        }],
+      }),
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      console.error('Chart analysis AI error:', aiRes.status, errText);
+      return res.status(502).json({ error: `Anthropic returned ${aiRes.status}` });
+    }
+
+    const aiData = await aiRes.json();
+    const text = aiData?.content?.[0]?.text || '';
+    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    let analysis;
+    try {
+      analysis = JSON.parse(cleaned);
+    } catch (e) {
+      console.error('Chart analysis JSON parse failed:', cleaned);
+      return res.status(500).json({ error: 'AI returned invalid JSON', raw: cleaned });
+    }
+
+    res.json({ success: true, analysis, ts: new Date().toISOString() });
+  } catch (err) {
+    console.error('Chart analysis error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── /api/autosignal — Fully Automated Axiom Edge Signal Engine ───────────────
 const AUTO_SYMBOL_MAP = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
 const TICK_SIZE = { ES: 0.25, NQ: 0.25, DAX: 0.5, XAU: 0.10, OIL: 0.01 };
@@ -946,6 +1068,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/ai      — Claude streaming proxy (key: ${ANTHROPIC_KEY ? '✓ set' : '✗ MISSING'})`);
   console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
   console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
   if (!FRED_KEY) {
     console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);

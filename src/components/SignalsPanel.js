@@ -735,8 +735,195 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
   );
 }
 
+// ── CHART SCREENSHOT ANALYSER ─────────────────────────────────────────────────
+function ChartAnalyser({ onAutoFill }) {
+  const [image, setImage] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [instrument, setInstrument] = useState("ES");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef(null);
+
+  const handleFile = useCallback((file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImage(e.target.result);
+      setPreview(e.target.result);
+      setResult(null); setError(null);
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault(); setDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleFile(file);
+  }, [handleFile]);
+
+  const analyse = useCallback(async () => {
+    if (!image) return;
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/analyse-chart`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, instrument }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (d.success && d.analysis) {
+        setResult(d.analysis);
+      } else throw new Error("Invalid response");
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [image, instrument]);
+
+  const doAutoFill = useCallback(() => {
+    if (!result || !onAutoFill) return;
+    onAutoFill(result);
+  }, [result, onAutoFill]);
+
+  const inputStyle = { background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 3, padding: "4px 6px", color: "#e2e8f0", fontSize: 10, fontFamily: MONO, outline: "none" };
+
+  const levelRow = (label, value, conf) => (
+    <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, fontFamily: MONO, padding: "2px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+      <span style={{ color: value != null ? (conf === "high" ? "#00d4aa" : "#f6c90e") : "#334155", fontSize: 10, minWidth: 12 }}>
+        {value != null ? (conf === "high" ? "\u2713" : "\u25CB") : "\u2014"}
+      </span>
+      <span style={{ color: "#64748b", minWidth: 60 }}>{label}</span>
+      <span style={{ color: value != null ? "#e2e8f0" : "#334155", marginLeft: "auto" }}>
+        {value != null ? (typeof value === "number" ? value.toFixed(2) : value) : "not detected"}
+      </span>
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#4a9eff", fontFamily: MONO, letterSpacing: "0.1em" }}>
+          CHART SCREENSHOT ANALYSER
+        </div>
+        <span style={{ fontSize: 7, color: "#334155", fontFamily: MONO }}>VISION AI</span>
+      </div>
+
+      {/* Drop zone / Upload */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => fileRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? "rgba(74,158,255,0.5)" : "rgba(255,255,255,0.1)"}`,
+          borderRadius: 6, padding: preview ? 6 : 20,
+          textAlign: "center", cursor: "pointer",
+          background: dragOver ? "rgba(74,158,255,0.05)" : "rgba(0,0,0,0.2)",
+          transition: "all 0.15s",
+        }}
+      >
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: "none" }}
+          onChange={e => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
+        {preview ? (
+          <img src={preview} alt="Chart" style={{ maxWidth: "100%", maxHeight: 160, borderRadius: 4, opacity: 0.9 }} />
+        ) : (
+          <>
+            <div style={{ fontSize: 20, marginBottom: 4 }}>{"\uD83D\uDCF7"}</div>
+            <div style={{ fontSize: 10, color: "#64748b", fontFamily: MONO }}>Drop chart screenshot here or click to upload</div>
+            <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, marginTop: 4 }}>PNG, JPG, WEBP</div>
+          </>
+        )}
+      </div>
+
+      {/* Instrument + Analyse */}
+      {image && (
+        <div style={{ display: "flex", gap: 6 }}>
+          <select value={instrument} onChange={e => setInstrument(e.target.value)}
+            style={{ ...inputStyle, cursor: "pointer", width: 80 }}>
+            {INSTRUMENTS.map(i => <option key={i} value={i}>{i}</option>)}
+          </select>
+          <button onClick={analyse} disabled={loading} style={{
+            flex: 1, padding: "8px 0", fontSize: 10, fontWeight: 700,
+            fontFamily: MONO, letterSpacing: "0.08em",
+            background: loading ? "rgba(74,158,255,0.05)" : "rgba(74,158,255,0.15)",
+            border: "1px solid rgba(74,158,255,0.3)", borderRadius: 4,
+            color: "#4a9eff", cursor: loading ? "default" : "pointer",
+          }}>{loading ? "ANALYSING CHART..." : "\uD83D\uDD0D ANALYSE CHART"}</button>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ fontSize: 9, color: "#ff4d6d", fontFamily: MONO, padding: "6px 8px", background: "rgba(255,77,109,0.1)", borderRadius: 4 }}>
+          ERROR: {error}
+        </div>
+      )}
+
+      {/* Results */}
+      {result && (
+        <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(74,158,255,0.15)", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 6 }}>
+            LEVELS DETECTED
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <div>
+              {levelRow("Price", result.current_price, result.confidence)}
+              {levelRow("VAH", result.vah, result.confidence)}
+              {levelRow("VAL", result.val, result.confidence)}
+              {levelRow("POC", result.poc, result.confidence)}
+              {levelRow("IB High", result.ib_high, result.confidence)}
+              {levelRow("IB Low", result.ib_low, result.confidence)}
+              {levelRow("Trend", result.trend, result.confidence)}
+            </div>
+            <div>
+              {levelRow("D1 QP", result.d1_qp, "medium")}
+              {levelRow("D1 QHi", result.d1_qhi, "medium")}
+              {levelRow("D1 QLo", result.d1_qlo, "medium")}
+              {levelRow("H4 QP", result.h4_qp, "medium")}
+              {levelRow("Pattern", result.m30_pattern, result.confidence)}
+              {levelRow("VA Open", result.va_open, result.confidence)}
+              {levelRow("ADR Exh.", result.adr_exhausted === true ? "Yes" : result.adr_exhausted === false ? "No" : null, result.confidence)}
+            </div>
+          </div>
+
+          {/* Notes */}
+          {result.notes && (
+            <div style={{ fontSize: 8, color: "#64748b", fontFamily: MONO, lineHeight: 1.5, marginTop: 8, padding: "6px 8px", background: "rgba(0,0,0,0.2)", borderRadius: 3 }}>
+              {result.notes}
+            </div>
+          )}
+
+          {/* Confidence badge */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+            <span style={{
+              fontSize: 8, fontFamily: MONO, fontWeight: 700, padding: "2px 8px", borderRadius: 3,
+              color: result.confidence === "high" ? "#00d4aa" : result.confidence === "medium" ? "#f6c90e" : "#ff4d6d",
+              background: (result.confidence === "high" ? "#00d4aa" : result.confidence === "medium" ? "#f6c90e" : "#ff4d6d") + "15",
+            }}>{(result.confidence || "").toUpperCase()} CONFIDENCE</span>
+
+            {onAutoFill && (
+              <button onClick={doAutoFill} style={{
+                flex: 1, padding: "5px 0", fontSize: 9, fontWeight: 700,
+                fontFamily: MONO, letterSpacing: "0.06em",
+                background: "rgba(0,212,170,0.12)", border: "1px solid rgba(0,212,170,0.3)",
+                borderRadius: 4, color: "#00d4aa", cursor: "pointer",
+              }}>AUTO-FILL AI ANALYSER \u2192</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Supported platforms */}
+      <div style={{ fontSize: 7, color: "#1e293b", fontFamily: MONO, textAlign: "center" }}>
+        Works with TradingView, Deepcharts, Sierra Chart, NinjaTrader, ThinkOrSwim, or any charting platform
+      </div>
+    </div>
+  );
+}
+
 // ── AI SIGNAL ANALYSER (manual input) ─────────────────────────────────────────
-function AISignalAnalyser() {
+function AISignalAnalyser({ chartData }) {
   const [form, setForm] = useState({
     instrument: "ES", currentPrice: "", atr: "",
     vah: "", val: "",
@@ -752,6 +939,33 @@ function AISignalAnalyser() {
   const [fetchingATR, setFetchingATR] = useState(false);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Auto-fill from chart analysis
+  useEffect(() => {
+    if (!chartData) return;
+    const d = chartData;
+    setForm(f => ({
+      ...f,
+      instrument: d.instrument || f.instrument,
+      currentPrice: d.current_price != null ? String(d.current_price) : f.currentPrice,
+      vah: d.vah != null ? String(d.vah) : f.vah,
+      val: d.val != null ? String(d.val) : f.val,
+      d1QP: d.d1_qp != null ? String(d.d1_qp) : f.d1QP,
+      d1QHi: d.d1_qhi != null ? String(d.d1_qhi) : f.d1QHi,
+      d1QMid: d.d1_qmid != null ? String(d.d1_qmid) : f.d1QMid,
+      d1QLo: d.d1_qlo != null ? String(d.d1_qlo) : f.d1QLo,
+      h4QP: d.h4_qp != null ? String(d.h4_qp) : f.h4QP,
+      h4QHi: d.h4_qhi != null ? String(d.h4_qhi) : f.h4QHi,
+      h4QMid: d.h4_qmid != null ? String(d.h4_qmid) : f.h4QMid,
+      h4QLo: d.h4_qlo != null ? String(d.h4_qlo) : f.h4QLo,
+      ibHigh: d.ib_high != null ? String(d.ib_high) : f.ibHigh,
+      ibLow: d.ib_low != null ? String(d.ib_low) : f.ibLow,
+      trend: d.trend || f.trend,
+      vaOpen: d.va_open || f.vaOpen,
+      m30Pattern: d.m30_pattern || f.m30Pattern,
+      adrExhausted: d.adr_exhausted != null ? d.adr_exhausted : f.adrExhausted,
+    }));
+  }, [chartData]);
 
   const fetchATR = useCallback(async () => {
     setFetchingATR(true);
@@ -1117,8 +1331,14 @@ function ManualDecisionTree({ selectedInstrument }) {
 
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function SignalsPanel() {
-  const [mode, setMode] = useState("auto"); // "auto" | "ai" | "manual" | "calc"
+  const [mode, setMode] = useState("auto"); // "auto" | "chart" | "ai" | "manual" | "calc"
   const [selectedInstrument, setSelectedInstrument] = useState("ES");
+  const [chartData, setChartData] = useState(null);
+
+  const handleChartAutoFill = useCallback((data) => {
+    setChartData(data);
+    setMode("ai");
+  }, []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
@@ -1150,7 +1370,7 @@ export default function SignalsPanel() {
 
       {/* Mode toggle */}
       <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
-        {[["auto", "AUTO SIGNAL"], ["ai", "AI ANALYSER"], ["manual", "MANUAL TREE"], ["calc", "ATR CALC"]].map(([k, label]) => (
+        {[["auto", "AUTO"], ["chart", "CHART"], ["ai", "ANALYSER"], ["manual", "MANUAL"], ["calc", "ATR"]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} style={{
             flex: 1, padding: "5px 0", fontSize: 8, fontWeight: 700,
             fontFamily: MONO, letterSpacing: "0.08em", borderRadius: 3,
@@ -1164,7 +1384,8 @@ export default function SignalsPanel() {
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
         {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} />}
-        {mode === "ai" && <AISignalAnalyser />}
+        {mode === "chart" && <ChartAnalyser onAutoFill={handleChartAutoFill} />}
+        {mode === "ai" && <AISignalAnalyser chartData={chartData} />}
         {mode === "calc" && <ATRCalculator />}
         {mode === "manual" && <ManualDecisionTree selectedInstrument={selectedInstrument} />}
       </div>
