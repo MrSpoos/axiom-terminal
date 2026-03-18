@@ -442,6 +442,403 @@ Calculate stop and targets using the ATR value provided. Apply the playbook rule
   }
 });
 
+// ── /api/autosignal — Fully Automated Market Stalkers Signal Engine ──────────
+const AUTO_SYMBOL_MAP = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
+const TICK_SIZE = { ES: 0.25, NQ: 0.25, DAX: 0.5, XAU: 0.10, OIL: 0.01 };
+
+async function yahooChart(symbol, interval, range) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}&includePrePost=true`;
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  if (!r.ok) throw new Error(`Yahoo chart ${symbol} ${interval} HTTP ${r.status}`);
+  const d = await r.json();
+  const result = d?.chart?.result?.[0];
+  if (!result) throw new Error(`No chart data for ${symbol}`);
+  return result;
+}
+
+function calcTPOValueArea(bars, tickSize) {
+  // bars = [{ open, high, low, close }] — 30min RTH bars
+  if (!bars || bars.length === 0) return { vah: 0, val: 0, poc: 0 };
+  const tpoMap = {};
+  for (const bar of bars) {
+    const lo = Math.floor(bar.low / tickSize) * tickSize;
+    const hi = Math.ceil(bar.high / tickSize) * tickSize;
+    for (let p = lo; p <= hi; p = +(p + tickSize).toFixed(4)) {
+      const key = p.toFixed(4);
+      tpoMap[key] = (tpoMap[key] || 0) + 1;
+    }
+  }
+  const levels = Object.entries(tpoMap).map(([p, c]) => ({ price: parseFloat(p), count: c }));
+  levels.sort((a, b) => b.count - a.count || a.price - b.price);
+  const totalTPOs = levels.reduce((s, l) => s + l.count, 0);
+  const target = Math.ceil(totalTPOs * 0.70);
+  const poc = levels[0].price;
+
+  // Build VA: expand from POC alternating bigger side
+  const byPrice = [...levels].sort((a, b) => a.price - b.price);
+  const pocIdx = byPrice.findIndex(l => l.price === poc);
+  let lo = pocIdx, hi = pocIdx;
+  let accumulated = byPrice[pocIdx].count;
+  while (accumulated < target && (lo > 0 || hi < byPrice.length - 1)) {
+    const upCount = hi < byPrice.length - 1 ? byPrice[hi + 1].count : -1;
+    const dnCount = lo > 0 ? byPrice[lo - 1].count : -1;
+    if (upCount >= dnCount) { hi++; accumulated += byPrice[hi].count; }
+    else { lo--; accumulated += byPrice[lo].count; }
+  }
+  return {
+    vah: +byPrice[hi].price.toFixed(2),
+    val: +byPrice[lo].price.toFixed(2),
+    poc: +poc.toFixed(2),
+  };
+}
+
+function calcATR(dailyBars, period) {
+  if (dailyBars.length < 2) return 0;
+  const trs = [];
+  for (let i = 1; i < dailyBars.length; i++) {
+    const h = dailyBars[i].high, l = dailyBars[i].low, pc = dailyBars[i - 1].close;
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  const n = Math.min(period, trs.length);
+  const slice = trs.slice(-n);
+  return +(slice.reduce((s, v) => s + v, 0) / slice.length).toFixed(2);
+}
+
+function calcQuarterlyPivots(qHigh, qLow, qClose) {
+  const qp = (qHigh + qLow + qClose) / 3;
+  const range = qHigh - qLow;
+  return {
+    qp: +qp.toFixed(2),
+    qhi: +(qp + range).toFixed(2),
+    qmid: +((qp + (qp - range)) / 2).toFixed(2),
+    qlo: +(qp - range).toFixed(2),
+  };
+}
+
+function detectM30Pattern(bars, atr) {
+  if (!bars || bars.length < 3) return 'None';
+  const curr = bars[bars.length - 1];
+  const prev = bars[bars.length - 2];
+  // Bull Engulf
+  if (curr.close > prev.high && curr.open < prev.low) return 'Bull Engulf';
+  // Bear Engulf
+  if (curr.close < prev.low && curr.open > prev.high) return 'Bear Engulf';
+  // 3-Bar Reversal (bearish): 3 consecutive lower closes after up
+  if (bars.length >= 3) {
+    const b3 = bars[bars.length - 3], b2 = bars[bars.length - 2], b1 = bars[bars.length - 1];
+    if (b1.close < b2.close && b2.close < b3.close && b3.close > b3.open) return '3-Bar Reversal';
+  }
+  // Consolidation: range of last 3 bars < 0.3x ATR
+  if (bars.length >= 3 && atr > 0) {
+    const last3 = bars.slice(-3);
+    const rangeHi = Math.max(...last3.map(b => b.high));
+    const rangeLo = Math.min(...last3.map(b => b.low));
+    if ((rangeHi - rangeLo) < 0.3 * atr) return 'Consolidation';
+  }
+  return 'None';
+}
+
+function getESTTime() {
+  const now = new Date();
+  const est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  return { h: est.getHours(), m: est.getMinutes(), mins: est.getHours() * 60 + est.getMinutes() };
+}
+
+function getCurrentSession() {
+  const { mins } = getESTTime();
+  if (mins >= 480 && mins < 540) return 'IB (8:00-9:00am)';
+  if (mins >= 570 && mins < 630) return 'NY DRF (10:00am)';
+  if (mins >= 930 && mins < 970) return 'NY Close (4:00pm)';
+  if (mins >= 540 && mins < 570) return 'Post-IB';
+  if (mins >= 630 && mins < 930) return 'NY Mid-Day';
+  if (mins < 480) return 'Pre-Market';
+  return 'After Hours';
+}
+
+const AUTOSIGNAL_SYSTEM = `You are a Market Stalkers Method signal engine. Analyse the provided market data and determine the correct trading signal using ONLY these playbook rules:
+
+PLAYBOOK #1 — WITH THE TREND (IB Extension):
+- Trend confirmed (price above/below QP+QMid)
+- QP level: D1 QHi → go to PB3, D1 QMid/QLo → continue
+- ADR not exhausted
+- VA rejection + IB extension in trend direction
+- H4 conterminous supply/demand within 5-10 ticks of VAH/VAL
+- M30 bull/bear engulf or consolidation at zone
+- Profit margin 3-5x available → SIGNAL: LONG/SHORT 2R
+
+PLAYBOOK #2 — RETURN TO VAH/VAL:
+- Trend UP + Open Above VAH: only if QLo recently rejected
+- Trend DOWN + Open Below VAL: only if QHi recently rejected
+- D1/H4 conterminous demand/supply at VAH/VAL (within 5-10 ticks)
+- M30 bull/bear engulf or consolidation
+- In NY DRF (10am EST) or NY Close (4pm EST) window
+- Profit margin 2-3x → SIGNAL: LONG/SHORT 2R
+
+PLAYBOOK #3 — COUNTERTREND ADR EXHAUSTION:
+- ADR exhausted (today range > 80% ADR)
+- 3/3 trend confirmed on H4+D1+W1
+- D1 bullish engulf (CT long) or bearish engulf (CT short)
+- Phase 1 (bullish): bull engulf or consolidation breaking above swing high M15/M30/H4
+- Phase 3 (bearish): 3-bar reversal on M15/M30/H4
+- VA rejection + IB extension
+- Profit margin 3-5x → SIGNAL: CT LONG/SHORT 2R MAX
+
+PLAYBOOK #4 — COUNTERTREND SWING/INTRADAY:
+- Trend DOWN + rejected D1 QLo (CT long) OR Trend UP + rejected D1 QHi (CT short)
+- ADR exhausted
+- IB extension + buying/selling tail
+- Recent D1 bull/bear engulf c-line
+- Return to VAH/VAL + bull/bear engulf on D1/H4/M30
+- Profit margin 3-5x → SIGNAL: CT SWING 3-5R or CT INTRADAY 2-3R
+
+RULES:
+- If no playbook qualifies → NO TRADE
+- Countertrend trades ALWAYS closed at end of session
+- 1R = D1 14-period ATR
+- IB = 8:00-9:00am EST
+- Active sessions: NY DRF 10am EST · NY Close 4pm EST
+- VA = TPO-based, previous day RTH 9:30am-4pm EST, 30-min periods
+- Conterminous tolerance: within 5-10 ticks / 1-2 points
+
+Respond ONLY in this exact JSON, no other text:
+{
+  "playbook": "PB1" or "PB2" or "PB3" or "PB4" or "NO TRADE",
+  "signal": "LONG" or "SHORT" or "NO TRADE",
+  "direction": "With Trend" or "Countertrend Intraday" or "Countertrend Swing" or "None",
+  "target_r": "2R" or "2-3R" or "3-5R" or "None",
+  "stop": <number>,
+  "target_1r": <number>,
+  "target_2r": <number>,
+  "target_3r": <number>,
+  "criteria": [{"condition": "<text>", "met": true/false}],
+  "reasoning": "<2-3 sentence explanation>",
+  "confidence": "High" or "Medium" or "Low"
+}`;
+
+app.get('/api/autosignal', async (req, res) => {
+  const sym = (req.query.symbol || 'ES').toUpperCase();
+  const yahooSym = AUTO_SYMBOL_MAP[sym];
+  if (!yahooSym) return res.status(400).json({ error: `Unknown symbol: ${sym}. Use ES/NQ/DAX/XAU/OIL` });
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
+
+  const tick = TICK_SIZE[sym] || 0.25;
+
+  try {
+    // Parallel fetch: 30m bars (5d), daily bars (3mo), intraday 5m (1d)
+    const [chart30m, chartDaily] = await Promise.all([
+      yahooChart(yahooSym, '30m', '5d'),
+      yahooChart(yahooSym, '1d', '3mo'),
+    ]);
+
+    const ts30 = chart30m.timestamp || [];
+    const q30 = chart30m.indicators?.quote?.[0] || {};
+    const tsD = chartDaily.timestamp || [];
+    const qD = chartDaily.indicators?.quote?.[0] || {};
+    const meta = chart30m.meta || {};
+    const currentPrice = meta.regularMarketPrice || 0;
+
+    // ── Build daily OHLC bars ──
+    const dailyBars = [];
+    for (let i = 0; i < tsD.length; i++) {
+      if (qD.open?.[i] != null && qD.high?.[i] != null && qD.low?.[i] != null && qD.close?.[i] != null) {
+        dailyBars.push({ ts: tsD[i], open: qD.open[i], high: qD.high[i], low: qD.low[i], close: qD.close[i] });
+      }
+    }
+
+    // ATR (14-period) and ADR (20-day)
+    const atr14 = calcATR(dailyBars, 14);
+    const adr20 = calcATR(dailyBars, 20);
+
+    // ── Quarterly pivots from last completed quarter ──
+    const lastBar = dailyBars[dailyBars.length - 1];
+    const lastDate = lastBar ? new Date(lastBar.ts * 1000) : new Date();
+    const curQtr = Math.floor(lastDate.getMonth() / 3);
+    const prevQtrEnd = new Date(lastDate.getFullYear(), curQtr * 3, 0);
+    const prevQtrStart = new Date(prevQtrEnd.getFullYear(), prevQtrEnd.getMonth() - 2, 1);
+    const qtrBars = dailyBars.filter(b => {
+      const d = new Date(b.ts * 1000);
+      return d >= prevQtrStart && d <= prevQtrEnd;
+    });
+    let d1Pivots = { qp: 0, qhi: 0, qmid: 0, qlo: 0 };
+    if (qtrBars.length > 0) {
+      const qHigh = Math.max(...qtrBars.map(b => b.high));
+      const qLow = Math.min(...qtrBars.map(b => b.low));
+      const qClose = qtrBars[qtrBars.length - 1].close;
+      d1Pivots = calcQuarterlyPivots(qHigh, qLow, qClose);
+    }
+
+    // ── Build 30m bars and filter RTH yesterday ──
+    const bars30m = [];
+    for (let i = 0; i < ts30.length; i++) {
+      if (q30.open?.[i] != null && q30.high?.[i] != null && q30.low?.[i] != null && q30.close?.[i] != null) {
+        bars30m.push({ ts: ts30[i], open: q30.open[i], high: q30.high[i], low: q30.low[i], close: q30.close[i] });
+      }
+    }
+
+    // Separate yesterday RTH (9:30-16:00 EST) and today's bars
+    const nowEST = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const todayStr = `${nowEST.getFullYear()}-${String(nowEST.getMonth() + 1).padStart(2, '0')}-${String(nowEST.getDate()).padStart(2, '0')}`;
+
+    const yesterdayRTH = [];
+    const todayBars = [];
+    const todayIBBars = [];
+    const todayM30Bars = [];
+
+    for (const bar of bars30m) {
+      const d = new Date(bar.ts * 1000);
+      const est = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const dateStr = `${est.getFullYear()}-${String(est.getMonth() + 1).padStart(2, '0')}-${String(est.getDate()).padStart(2, '0')}`;
+      const hhmm = est.getHours() * 60 + est.getMinutes();
+
+      if (dateStr === todayStr) {
+        todayBars.push(bar);
+        if (hhmm >= 480 && hhmm < 540) todayIBBars.push(bar); // 8:00-9:00 IB
+        todayM30Bars.push(bar);
+      } else if (hhmm >= 570 && hhmm < 960) {
+        // RTH: 9:30 (570min) to 16:00 (960min)
+        yesterdayRTH.push(bar);
+      }
+    }
+
+    // Keep only last day's RTH bars
+    if (yesterdayRTH.length > 0) {
+      const lastRTHDate = new Date(yesterdayRTH[yesterdayRTH.length - 1].ts * 1000)
+        .toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
+      const filtered = yesterdayRTH.filter(b => {
+        const d = new Date(b.ts * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
+        return d === lastRTHDate;
+      });
+      yesterdayRTH.length = 0;
+      yesterdayRTH.push(...filtered);
+    }
+
+    // ── Calculate TPO Value Area ──
+    const va = calcTPOValueArea(yesterdayRTH, tick);
+
+    // ── IB High/Low ──
+    let ibHigh = null, ibLow = null;
+    if (todayIBBars.length > 0) {
+      ibHigh = +Math.max(...todayIBBars.map(b => b.high)).toFixed(2);
+      ibLow = +Math.min(...todayIBBars.map(b => b.low)).toFixed(2);
+    }
+
+    // ── M30 pattern ──
+    const m30Pattern = detectM30Pattern(todayM30Bars, atr14);
+
+    // ── Context derivation ──
+    let vaOpen = 'Inside VA';
+    if (currentPrice > va.vah) vaOpen = 'Above VAH';
+    else if (currentPrice < va.val) vaOpen = 'Below VAL';
+
+    let trend = 'NEUTRAL';
+    if (currentPrice > d1Pivots.qp && currentPrice > d1Pivots.qmid) trend = 'UP';
+    else if (currentPrice < d1Pivots.qp && currentPrice < d1Pivots.qmid) trend = 'DOWN';
+
+    const todayHigh = todayBars.length > 0 ? Math.max(...todayBars.map(b => b.high)) : currentPrice;
+    const todayLow = todayBars.length > 0 ? Math.min(...todayBars.map(b => b.low)) : currentPrice;
+    const todayRange = todayHigh - todayLow;
+    const adrExhausted = adr20 > 0 && todayRange > 0.8 * adr20;
+
+    let ibExtension = 'NONE';
+    if (ibHigh && currentPrice > ibHigh) ibExtension = 'UP';
+    else if (ibLow && currentPrice < ibLow) ibExtension = 'DOWN';
+
+    const session = getCurrentSession();
+
+    // ── Data object to return + send to AI ──
+    const dataUsed = {
+      vah: va.vah, val: va.val, poc: va.poc,
+      atr: atr14, adr: adr20,
+      ib_high: ibHigh, ib_low: ibLow,
+      current_price: +currentPrice.toFixed(2),
+      trend, va_open: vaOpen,
+      m30_pattern: m30Pattern,
+      adr_exhausted: adrExhausted,
+      ib_extension: ibExtension,
+      session,
+      d1_qp: d1Pivots.qp, d1_qhi: d1Pivots.qhi, d1_qmid: d1Pivots.qmid, d1_qlo: d1Pivots.qlo,
+      today_high: +todayHigh.toFixed(2), today_low: +todayLow.toFixed(2),
+      today_range: +todayRange.toFixed(2),
+      yesterday_rth_bars: yesterdayRTH.length,
+      today_bars: todayBars.length,
+    };
+
+    // ── Call Claude ──
+    const userPrompt = `Analyse this LIVE market data for ${sym} and determine the correct Market Stalkers playbook signal:
+
+INSTRUMENT: ${sym}
+CURRENT PRICE: ${dataUsed.current_price}
+
+D1 ATR (14-period): ${dataUsed.atr}
+ADR (20-day TR): ${dataUsed.adr}
+TODAY'S RANGE: ${dataUsed.today_range} (${adrExhausted ? 'EXHAUSTED >80% ADR' : 'Not exhausted'})
+
+VALUE AREA (TPO-based, yesterday RTH 30min bars, ${yesterdayRTH.length} periods):
+- VAH: ${dataUsed.vah}
+- VAL: ${dataUsed.val}
+- POC: ${dataUsed.poc}
+- VA Open: ${dataUsed.va_open}
+
+QUARTERLY PIVOTS (D1):
+- QP: ${dataUsed.d1_qp} | QHi: ${dataUsed.d1_qhi} | QMid: ${dataUsed.d1_qmid} | QLo: ${dataUsed.d1_qlo}
+
+INITIAL BALANCE (8:00-9:00am EST):
+- IB High: ${dataUsed.ib_high || 'Not yet formed'}
+- IB Low: ${dataUsed.ib_low || 'Not yet formed'}
+- IB Extension: ${dataUsed.ib_extension}
+
+TREND: ${dataUsed.trend}
+M30 PATTERN (last completed bar): ${dataUsed.m30_pattern}
+ADR EXHAUSTED: ${dataUsed.adr_exhausted ? 'YES' : 'NO'}
+CURRENT SESSION: ${dataUsed.session}
+
+Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using ATR.`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1500,
+        system: AUTOSIGNAL_SYSTEM,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      console.error('AutoSignal AI error:', aiRes.status, errText);
+      // Return data even if AI fails
+      return res.json({ success: true, signal: null, data_used: dataUsed, ai_error: `Anthropic ${aiRes.status}`, ts: new Date().toISOString() });
+    }
+
+    const aiData = await aiRes.json();
+    const text = aiData?.content?.[0]?.text || '';
+    const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    let signal;
+    try {
+      signal = JSON.parse(cleaned);
+    } catch (e) {
+      console.error('AutoSignal JSON parse failed:', cleaned);
+      return res.json({ success: true, signal: null, data_used: dataUsed, ai_error: 'Invalid AI response', raw: cleaned, ts: new Date().toISOString() });
+    }
+
+    // Attach data_used to signal
+    signal.data_used = dataUsed;
+    res.json({ success: true, signal, data_used: dataUsed, ts: new Date().toISOString() });
+
+  } catch (err) {
+    console.error('AutoSignal error:', err);
+    res.status(500).json({ error: err.message, symbol: sym });
+  }
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -457,6 +854,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/macro   — 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
   console.log(`   /api/ai      — Claude streaming proxy (key: ${ANTHROPIC_KEY ? '✓ set' : '✗ MISSING'})`);
   console.log(`   /api/signals — Market Stalkers AI Signal Analyser`);
+  console.log(`   /api/autosignal — Fully Automated Signal Engine (ES/NQ/DAX/XAU/OIL)`);
   if (!FRED_KEY) {
     console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);

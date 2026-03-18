@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 const INSTRUMENTS = ["ES", "NQ", "DAX", "XAU", "OIL"];
@@ -508,7 +508,7 @@ const TREE = {
   signal_no_trade_range:     { id: "signal_no_trade_range",     step: 6, signal: "NO TRADE", color: "#475569", label: "NO TRADE \u2014 INSIDE VA RANGE", summary: "Range market, opened inside VA (TPO). No edge. Wait for price to reach VA extremes." },
 };
 
-// ── AI SIGNAL ANALYSER ───────────────────────────────────────────────────────
+// ── SHARED ───────────────────────────────────────────────────────────────────
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
 
 const PLAYBOOK_NAMES = {
@@ -518,9 +518,213 @@ const PLAYBOOK_NAMES = {
   PB4: "PLAYBOOK #4 \u2014 CT SWING",
   "NO TRADE": "NO TRADE",
 };
-
 const SIGNAL_COLORS = { LONG: "#00d4aa", SHORT: "#ff4d6d", "CT LONG": "#f6c90e", "CT SHORT": "#f6c90e", "SWING LONG": "#4a9eff", "SWING SHORT": "#4a9eff", "NO TRADE": "#475569" };
+const CONFIDENCE_COLORS = { High: "#00d4aa", Medium: "#f6c90e", Low: "#ff4d6d" };
 
+// ── AUTO SIGNAL ENGINE ───────────────────────────────────────────────────────
+function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
+  const [result, setResult] = useState(null);
+  const [dataUsed, setDataUsed] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastFetch, setLastFetch] = useState(null);
+  const autoRef = useRef(null);
+
+  const fetchSignal = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/autosignal?symbol=${selectedInstrument}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setDataUsed(d.data_used || null);
+      if (d.signal) {
+        setResult({ ...d.signal, ts: d.ts });
+      } else if (d.ai_error) {
+        setResult(null);
+        setError(`Data fetched but AI failed: ${d.ai_error}`);
+        setDataUsed(d.data_used);
+      } else {
+        throw new Error("No signal in response");
+      }
+      setLastFetch(new Date());
+    } catch (e) { setError(e.message); setResult(null); }
+    setLoading(false);
+  }, [selectedInstrument]);
+
+  useEffect(() => {
+    if (autoRefresh) {
+      autoRef.current = setInterval(fetchSignal, 5 * 60 * 1000);
+      return () => clearInterval(autoRef.current);
+    } else {
+      if (autoRef.current) clearInterval(autoRef.current);
+    }
+  }, [autoRefresh, fetchSignal]);
+
+  const sigColor = result ? (SIGNAL_COLORS[result.signal] || "#475569") : "#475569";
+  const confColor = result?.confidence ? (CONFIDENCE_COLORS[result.confidence] || "#475569") : "#475569";
+
+  // Time ago
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 30000); return () => clearInterval(t); }, []);
+  const timeAgo = lastFetch ? (() => {
+    const diff = Math.floor((Date.now() - lastFetch.getTime()) / 60000);
+    return diff < 1 ? "just now" : `${diff}m ago`;
+  })() : null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Instrument selector */}
+      <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+        {INSTRUMENTS.map(inst => (
+          <button key={inst} onClick={() => onInstrumentChange(inst)} style={{
+            fontSize: 9, fontFamily: MONO, fontWeight: 600, padding: "3px 10px",
+            borderRadius: 10, cursor: "pointer", letterSpacing: "0.06em",
+            background: selectedInstrument === inst ? "rgba(74,158,255,0.2)" : "rgba(255,255,255,0.04)",
+            border: `1px solid ${selectedInstrument === inst ? "rgba(74,158,255,0.4)" : "rgba(255,255,255,0.08)"}`,
+            color: selectedInstrument === inst ? "#4a9eff" : "#475569",
+          }}>{inst}</button>
+        ))}
+      </div>
+
+      {/* GET SIGNAL button + auto-refresh */}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={fetchSignal} disabled={loading} style={{
+          flex: 1, padding: "10px 0", fontSize: 12, fontWeight: 700,
+          fontFamily: MONO, letterSpacing: "0.12em",
+          background: loading ? "rgba(74,158,255,0.05)" : "rgba(74,158,255,0.15)",
+          border: "1px solid rgba(74,158,255,0.35)", borderRadius: 5,
+          color: "#4a9eff", cursor: loading ? "default" : "pointer",
+        }}>
+          {loading ? "\u23F3 FETCHING DATA..." : "\u26A1 GET SIGNAL"}
+        </button>
+        <button onClick={() => setAutoRefresh(!autoRefresh)} style={{
+          padding: "10px 14px", fontSize: 8, fontWeight: 700,
+          fontFamily: MONO, letterSpacing: "0.06em", borderRadius: 5, cursor: "pointer",
+          background: autoRefresh ? "rgba(0,212,170,0.12)" : "rgba(255,255,255,0.04)",
+          border: `1px solid ${autoRefresh ? "rgba(0,212,170,0.3)" : "rgba(255,255,255,0.08)"}`,
+          color: autoRefresh ? "#00d4aa" : "#475569",
+        }}>{autoRefresh ? "\u25CF AUTO 5m" : "AUTO"}</button>
+      </div>
+
+      {/* Last updated */}
+      {timeAgo && (
+        <div style={{ fontSize: 7, color: "#334155", fontFamily: MONO, textAlign: "center" }}>
+          Last updated: {timeAgo} {autoRefresh && "\u00b7 auto-refresh ON"}
+        </div>
+      )}
+
+      {/* Data verification pills */}
+      {dataUsed && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "center" }}>
+          {[
+            ["VAH", dataUsed.vah], ["VAL", dataUsed.val], ["POC", dataUsed.poc],
+            ["ATR", dataUsed.atr], ["ADR", dataUsed.adr],
+            ["IB Hi", dataUsed.ib_high], ["IB Lo", dataUsed.ib_low],
+            ["Trend", dataUsed.trend], ["Pattern", dataUsed.m30_pattern],
+            ["Session", dataUsed.session],
+          ].map(([k, v]) => (
+            <span key={k} style={{
+              fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3,
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)",
+              color: v && v !== 0 && v !== "None" && v !== "NONE" && v !== "NEUTRAL" ? "#64748b" : "#1e293b",
+            }}>{k}: {v ?? "—"}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div style={{
+          fontSize: 9, fontFamily: MONO, padding: "8px 10px", borderRadius: 4,
+          background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.15)", color: "#ff4d6d",
+        }}>
+          {error.includes("Data unavailable") ? `Data unavailable for ${selectedInstrument}` :
+           error.includes("market") || error.includes("After") ? "Market closed \u2014 showing last session data" :
+           `ERROR: ${error}`}
+        </div>
+      )}
+
+      {/* Signal Result */}
+      {result && (
+        <div style={{ background: "rgba(0,0,0,0.4)", border: `2px solid ${sigColor}`, borderRadius: 8, padding: 16 }}>
+          {/* Top badges */}
+          <div style={{ textAlign: "center", marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "center", gap: 5, marginBottom: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 8, fontFamily: MONO, color: "#475569", padding: "1px 6px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>{selectedInstrument}</span>
+              {result.direction && result.direction !== "None" && (
+                <span style={{ fontSize: 8, fontFamily: MONO, color: sigColor, padding: "1px 6px", background: sigColor + "15", borderRadius: 3 }}>
+                  {result.direction}
+                </span>
+              )}
+              {result.target_r && result.target_r !== "None" && (
+                <span style={{ fontSize: 8, fontFamily: MONO, color: "#00d4aa", padding: "1px 6px", background: "rgba(0,212,170,0.1)", borderRadius: 3 }}>
+                  {result.target_r}
+                </span>
+              )}
+              {result.confidence && (
+                <span style={{ fontSize: 8, fontFamily: MONO, color: confColor, padding: "1px 6px", background: confColor + "12", borderRadius: 3, fontWeight: 700 }}>
+                  {result.confidence}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 700, color: sigColor, fontFamily: MONO, marginBottom: 2 }}>
+              {result.signal}
+            </div>
+            <div style={{ fontSize: 9, fontWeight: 600, color: "#94a3b8", fontFamily: MONO, letterSpacing: "0.08em" }}>
+              {PLAYBOOK_NAMES[result.playbook] || result.playbook}
+            </div>
+          </div>
+
+          {/* R target prices */}
+          {result.stop && (
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
+              <LevelPill label="STOP" value={Number(result.stop).toFixed(2)} color="#ff4d6d" />
+              {result.target_1r && <LevelPill label="1R" value={Number(result.target_1r).toFixed(2)} color="#f6c90e" />}
+              {result.target_2r && <LevelPill label="2R" value={Number(result.target_2r).toFixed(2)} color="#00d4aa" />}
+              {result.target_3r && <LevelPill label="3R" value={Number(result.target_3r).toFixed(2)} color="#4a9eff" />}
+            </div>
+          )}
+
+          {/* Criteria checklist */}
+          {result.criteria && result.criteria.length > 0 && (
+            <div style={{ marginBottom: 10, background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: 8 }}>
+              <div style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em", marginBottom: 4 }}>CRITERIA CHECK</div>
+              {result.criteria.map((c, i) => (
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", gap: 6, fontSize: 9, fontFamily: MONO,
+                  padding: "2px 0",
+                  borderBottom: i < result.criteria.length - 1 ? "1px solid rgba(255,255,255,0.03)" : "none",
+                }}>
+                  <span style={{ color: c.met ? "#00d4aa" : "#ff4d6d", fontSize: 10, minWidth: 14 }}>
+                    {c.met ? "\u2713" : "\u2717"}
+                  </span>
+                  <span style={{ color: c.met ? "#94a3b8" : "#64748b" }}>{c.condition}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Reasoning */}
+          {result.reasoning && (
+            <div style={{ fontSize: 9, color: "#64748b", fontFamily: MONO, lineHeight: 1.6, background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: 8 }}>
+              {result.reasoning}
+            </div>
+          )}
+
+          {/* Timestamp */}
+          {result.ts && (
+            <div style={{ fontSize: 7, color: "#1e293b", fontFamily: MONO, marginTop: 6, textAlign: "right" }}>
+              {new Date(result.ts).toLocaleTimeString()} EST {timeAgo && `\u00b7 ${timeAgo}`}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AI SIGNAL ANALYSER (manual input) ─────────────────────────────────────────
 function AISignalAnalyser() {
   const [form, setForm] = useState({
     instrument: "ES", currentPrice: "", atr: "",
@@ -902,7 +1106,7 @@ function ManualDecisionTree({ selectedInstrument }) {
 
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function SignalsPanel() {
-  const [mode, setMode] = useState("ai"); // "ai" | "manual"
+  const [mode, setMode] = useState("auto"); // "auto" | "ai" | "manual" | "calc"
   const [selectedInstrument, setSelectedInstrument] = useState("ES");
 
   return (
@@ -933,9 +1137,9 @@ export default function SignalsPanel() {
       {/* Session Clock */}
       <SessionClock />
 
-      {/* Mode toggle: AI Analyser / Manual Tree / ATR Calc */}
+      {/* Mode toggle */}
       <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
-        {[["ai", "AI ANALYSER"], ["manual", "MANUAL TREE"], ["calc", "ATR CALC"]].map(([k, label]) => (
+        {[["auto", "AUTO SIGNAL"], ["ai", "AI ANALYSER"], ["manual", "MANUAL TREE"], ["calc", "ATR CALC"]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} style={{
             flex: 1, padding: "5px 0", fontSize: 8, fontWeight: 700,
             fontFamily: MONO, letterSpacing: "0.08em", borderRadius: 3,
@@ -948,6 +1152,7 @@ export default function SignalsPanel() {
 
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} />}
         {mode === "ai" && <AISignalAnalyser />}
         {mode === "calc" && <ATRCalculator />}
         {mode === "manual" && <ManualDecisionTree selectedInstrument={selectedInstrument} />}
