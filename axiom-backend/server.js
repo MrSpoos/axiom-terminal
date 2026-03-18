@@ -208,56 +208,112 @@ async function fredSeries(seriesId) {
   return obs;
 }
 
-// ── /api/macro — 10Y, 2Y Treasuries, Fed Funds ───────────────────────────────
+// ── /api/macro — Full economic indicators ────────────────────────────────────
+// Helper: fetch FRED series and format as macro object
+async function fredMacro(seriesId, name, fmt) {
+  const obs = await fredSeries(seriesId);
+  if (!obs) return null;
+  const cur = parseFloat(obs[0].value);
+  const prev = obs[1] ? parseFloat(obs[1].value) : cur;
+  const value = fmt ? fmt(cur) : `${cur.toFixed(2)}%`;
+  const prevStr = fmt ? fmt(prev) : `${prev.toFixed(2)}%`;
+  return {
+    value, prev: prevStr,
+    trend: cur > prev + 0.01 ? 'up' : cur < prev - 0.01 ? 'down' : 'neutral',
+    next: 'Live', live: true,
+  };
+}
+
+// Helper: fetch Yahoo Finance rate (for treasury yields — no API key needed)
+async function yahooMacro(symbol) {
+  const q = await yahooQuote(symbol);
+  return {
+    value: `${q.price.toFixed(2)}%`,
+    prev: `${q.prev.toFixed(2)}%`,
+    trend: q.chg > 0.01 ? 'up' : q.chg < -0.01 ? 'down' : 'neutral',
+    next: 'Live', live: true,
+  };
+}
+
 app.get('/api/macro', async (req, res) => {
   try {
     const macro = {};
 
-    // 10Y Treasury from Yahoo Finance (^TNX, no key needed)
-    try {
-      const tnx = await yahooQuote('^TNX');
-      macro['10Y Treasury'] = {
-        value: `${tnx.price.toFixed(2)}%`,
-        prev: `${tnx.prev.toFixed(2)}%`,
-        trend: tnx.chg > 0.01 ? 'up' : tnx.chg < -0.01 ? 'down' : 'neutral',
-        next: 'Live',
-        live: true,
-      };
-    } catch (e) { console.warn('10Y Yahoo failed:', e.message); }
+    // All fetches in parallel — each wrapped in try/catch so one failure doesn't kill the rest
+    const jobs = [
+      // 10Y Treasury — Yahoo (^TNX) primary, FRED (DGS10) fallback
+      (async () => {
+        try { macro['10Y Treasury'] = await yahooMacro('^TNX'); }
+        catch { try { const m = await fredMacro('DGS10', '10Y'); if (m) macro['10Y Treasury'] = m; } catch (e) { console.warn('10Y failed:', e.message); } }
+      })(),
+      // 2Y Treasury — FRED (DGS2) primary, Yahoo (^TYX is 30Y so skip)
+      (async () => {
+        try { const m = await fredMacro('DGS2'); if (m) macro['2Y Treasury'] = m; }
+        catch (e) { console.warn('2Y failed:', e.message); }
+      })(),
+      // Fed Funds Rate — FRED (FEDFUNDS)
+      (async () => {
+        try { const m = await fredMacro('FEDFUNDS'); if (m) macro['Fed Funds Rate'] = m; }
+        catch (e) { console.warn('Fed Funds failed:', e.message); }
+      })(),
+      // CPI YoY — FRED (CPIAUCSL) — value is index, need YoY calc
+      (async () => {
+        try {
+          const obs = await fredSeries('CPIAUCSL');
+          if (obs && obs.length >= 2) {
+            // FRED returns latest observations; for YoY we'd need 12-month lag
+            // Use the latest value and show as index for now
+            const cur = parseFloat(obs[0].value);
+            const prev = parseFloat(obs[1].value);
+            const yoy = ((cur - prev) / prev * 100);
+            macro['CPI YoY'] = {
+              value: `${yoy.toFixed(1)}%`, prev: `${((prev - parseFloat((obs[2] || obs[1]).value)) / parseFloat((obs[2] || obs[1]).value) * 100).toFixed(1)}%`,
+              trend: yoy > 3 ? 'up' : yoy < 2 ? 'down' : 'neutral',
+              next: 'Live', live: true,
+            };
+          }
+        } catch (e) { console.warn('CPI failed:', e.message); }
+      })(),
+      // Core PCE — FRED (PCEPILFE)
+      (async () => {
+        try {
+          const obs = await fredSeries('PCEPILFE');
+          if (obs && obs.length >= 2) {
+            const cur = parseFloat(obs[0].value);
+            const prev = parseFloat(obs[1].value);
+            const chg = ((cur - prev) / prev * 100);
+            macro['Core PCE'] = {
+              value: `${chg.toFixed(1)}%`, prev: `${prev.toFixed(1)}`,
+              trend: chg > 0.3 ? 'up' : chg < 0 ? 'down' : 'neutral',
+              next: 'Live', live: true,
+            };
+          }
+        } catch (e) { console.warn('Core PCE failed:', e.message); }
+      })(),
+      // Unemployment — FRED (UNRATE)
+      (async () => {
+        try { const m = await fredMacro('UNRATE'); if (m) macro['Unemployment'] = m; }
+        catch (e) { console.warn('Unemployment failed:', e.message); }
+      })(),
+      // GDP Growth — FRED (A191RL1Q225SBEA = Real GDP % change)
+      (async () => {
+        try {
+          const m = await fredMacro('A191RL1Q225SBEA', 'GDP', v => `${v.toFixed(1)}%`);
+          if (m) macro['GDP Growth (Q4)'] = m;
+        } catch (e) { console.warn('GDP failed:', e.message); }
+      })(),
+      // ISM Manufacturing — FRED (MANEMP is employment, use NAPM for ISM PMI)
+      (async () => {
+        try {
+          const m = await fredMacro('NAPM', 'ISM', v => v.toFixed(1));
+          if (m) macro['ISM Manuf.'] = m;
+        } catch (e) { console.warn('ISM failed:', e.message); }
+      })(),
+    ];
 
-    // 2Y Treasury from FRED (requires FRED_API_KEY)
-    try {
-      const obs = await fredSeries('DGS2');
-      if (obs) {
-        const cur = parseFloat(obs[0].value);
-        const prev = obs[1] ? parseFloat(obs[1].value) : cur;
-        macro['2Y Treasury'] = {
-          value: `${cur.toFixed(2)}%`,
-          prev: `${prev.toFixed(2)}%`,
-          trend: cur > prev + 0.01 ? 'up' : cur < prev - 0.01 ? 'down' : 'neutral',
-          next: 'Live',
-          live: true,
-        };
-      }
-    } catch (e) { console.warn('2Y FRED failed:', e.message); }
+    await Promise.allSettled(jobs);
 
-    // Fed Funds Rate from FRED (requires FRED_API_KEY)
-    try {
-      const obs = await fredSeries('FEDFUNDS');
-      if (obs) {
-        const cur = parseFloat(obs[0].value);
-        const prev = obs[1] ? parseFloat(obs[1].value) : cur;
-        macro['Fed Funds Rate'] = {
-          value: `${cur.toFixed(2)}%`,
-          prev: `${prev.toFixed(2)}%`,
-          trend: cur > prev + 0.01 ? 'up' : cur < prev - 0.01 ? 'down' : 'neutral',
-          next: 'Live',
-          live: true,
-        };
-      }
-    } catch (e) { console.warn('Fed Funds FRED failed:', e.message); }
-
-    res.json({ success: true, data: macro, fredEnabled: !!FRED_KEY });
+    res.json({ success: true, data: macro, fredEnabled: !!FRED_KEY, ts: new Date().toISOString() });
   } catch (err) {
     console.error('Macro error:', err);
     res.status(500).json({ success: false, error: err.message });

@@ -395,14 +395,15 @@ function GammaLevels() {
   );
 }
 
-function OptionsChain() {
+function OptionsChain({ livePrice }) {
   const [selExpiry, setSelExpiry] = useState(OPTIONS_CHAIN.selectedExpiry);
   const [aiOpen, setAiOpen] = useState(false);
+  const displayPrice = livePrice || OPTIONS_CHAIN.price;
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
         {OPTIONS_CHAIN.expiries.map(e => (<button key={e} onClick={() => setSelExpiry(e)} style={{ fontSize: 10, padding: "3px 10px", borderRadius: 3, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", background: selExpiry === e ? "#4a9eff22" : "none", border: `1px solid ${selExpiry === e ? "#4a9eff" : "rgba(255,255,255,0.1)"}`, color: selExpiry === e ? "#4a9eff" : "#64748b" }}>{e}</button>))}
-        <span style={{ marginLeft: "auto", fontSize: 10, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace", display: "flex", alignItems: "center" }}>SPY {OPTIONS_CHAIN.price}</span>
+        <span style={{ marginLeft: "auto", fontSize: 10, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace", display: "flex", alignItems: "center" }}>SPY {displayPrice.toFixed(2)}</span>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -411,7 +412,7 @@ function OptionsChain() {
         </table>
       </div>
       <button onClick={() => setAiOpen(!aiOpen)} style={{ marginTop: 8, fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}>{aiOpen ? "▲ HIDE AI OPTIONS ANALYSIS" : "▼ AI OPTIONS FLOW ANALYSIS"}</button>
-      {aiOpen && <div style={{ marginTop: 8, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160 }}><AIAnalysis prompt={`Analyze SPY options chain expiry ${selExpiry}. Underlying $527.43, ATM strikes 525/527, big OI at 530 (94.5K calls, 88.6K puts). IV skew, put/call dynamics, what's the trade?`} /></div>}
+      {aiOpen && <div style={{ marginTop: 8, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160 }}><AIAnalysis prompt={`Analyze SPY options chain expiry ${selExpiry}. Underlying $${displayPrice.toFixed(2)}. Look at the strike ladder, IV skew, put/call OI dynamics around the ATM strike. What's the trade?`} /></div>}
     </div>
   );
 }
@@ -623,7 +624,7 @@ export default function Terminal() {
               <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`}>
                 <NewsFeed newsItems={news} newsStatus={newsStatus} />
               </Panel>
-              <Panel title="Options Chain" badge="SPY · Live"><OptionsChain /></Panel>
+              <Panel title="Options Chain" badge="SPY · Live"><OptionsChain livePrice={tickers.find(t => t.sym === "SPY")?.price} /></Panel>
               <Panel title="Economic Indicators" badge={Object.keys(macroLive).length > 0 ? "LIVE" : "Static"}>
                 <EconomicIndicators macroLive={macroLive} />
               </Panel>
