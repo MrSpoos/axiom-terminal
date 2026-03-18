@@ -557,9 +557,33 @@ app.post('/api/signals', async (req, res) => {
     return res.status(400).json({ error: 'instrument and currentPrice are required' });
   }
 
+  // Pre-compute conterminous if H4 levels and VA levels provided
+  const inst = data.instrument || 'ES';
+  let conterminousInfo = '';
+  if (data.vah && data.val) {
+    const vah = parseFloat(data.vah), val = parseFloat(data.val);
+    // Check H4 QP levels against VA
+    const h4Levels = [data.h4QP, data.h4QHi, data.h4QMid, data.h4QLo].filter(Boolean).map(Number);
+    if (h4Levels.length > 0) {
+      const nearVAH = h4Levels.reduce((best, l) => {
+        const c = isConterminous(l, vah, inst);
+        return (!best || c.distance < best.distance) ? { level: l, ...c } : best;
+      }, null);
+      const nearVAL = h4Levels.reduce((best, l) => {
+        const c = isConterminous(l, val, inst);
+        return (!best || c.distance < best.distance) ? { level: l, ...c } : best;
+      }, null);
+      conterminousInfo = `
+CONTERMINOUS CHECK (pre-calculated, tolerance: ${nearVAH?.tolerance ?? 'N/A'} pts):
+- Nearest H4 level to VAH: ${nearVAH ? `${nearVAH.level} (distance: ${nearVAH.distance} pts) → ${nearVAH.conterminous ? 'CONTERMINOUS' : 'NOT conterminous'}` : 'No H4 levels provided'}
+- Nearest H4 level to VAL: ${nearVAL ? `${nearVAL.level} (distance: ${nearVAL.distance} pts) → ${nearVAL.conterminous ? 'CONTERMINOUS' : 'NOT conterminous'}` : 'No H4 levels provided'}
+NOTE: Conterminous values are pre-validated. Use directly.`;
+    }
+  }
+
   const userPrompt = `Analyse this market setup and determine the correct Axiom Edge playbook signal:
 
-INSTRUMENT: ${data.instrument}
+INSTRUMENT: ${inst}
 CURRENT PRICE: ${data.currentPrice}
 D1 ATR (14-period, 20-day TR): ${data.atr || 'Not provided'}
 
@@ -569,8 +593,9 @@ VALUE AREA (TPO-based):
 - VA Open Position: ${data.vaOpen || 'Not provided'}
 
 QUARTERLY PIVOTS:
-- D1 QP: ${data.d1QP || 'N/A'} | D1 QHi: ${data.d1QHi || 'N/A'} | D1 QMid: ${data.d1QMid || 'N/A'} | D1 QLo: ${data.d1QLo || 'N/A'}
-- H4 QP: ${data.h4QP || 'N/A'} | H4 QHi: ${data.h4QHi || 'N/A'} | H4 QMid: ${data.h4QMid || 'N/A'} | H4 QLo: ${data.h4QLo || 'N/A'}
+- D1: QP: ${data.d1QP || 'N/A'} | QHi: ${data.d1QHi || 'N/A'} | QMid: ${data.d1QMid || 'N/A'} | QLo: ${data.d1QLo || 'N/A'}
+- H4: QP: ${data.h4QP || data.d1QP || 'N/A'} | QHi: ${data.h4QHi || data.d1QHi || 'N/A'} | QMid: ${data.h4QMid || data.d1QMid || 'N/A'} | QLo: ${data.h4QLo || data.d1QLo || 'N/A'}
+${conterminousInfo}
 
 INITIAL BALANCE (per instrument IB window):
 - IB High: ${data.ibHigh || 'Not provided / not yet formed'}
@@ -582,7 +607,7 @@ M30 PATTERN: ${data.m30Pattern || 'None'}
 ADR EXHAUSTED (>= 80% of 20-day TR): ${data.adrExhausted ? 'YES' : 'NO'}
 CURRENT TIME (ET): ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true })}
 
-IMPORTANT: Check IB status and time. PB2 does NOT require IB. PB1 requires IB set. Evaluate accordingly.
+IMPORTANT: Check IB status and time. PB2 does NOT require IB. PB1 requires IB set.
 Calculate stop and targets using the ATR value provided.`;
 
   try {
@@ -824,6 +849,100 @@ function calcQuarterlyPivots(qHigh, qLow, qClose) {
   };
 }
 
+// ── CONTERMINOUS CHECK (GAP 3) ───────────────────────────────────────────────
+const TICK_TOLERANCE = { ES: 10, NQ: 10, DAX: 10, XAU: 10, OIL: 10 };
+const TICK_VALUE_MAP = { ES: 0.25, NQ: 0.25, DAX: 1.0, XAU: 0.1, OIL: 0.01 };
+
+function isConterminous(h4Level, vaLevel, instrument) {
+  const tv = TICK_VALUE_MAP[instrument] || 0.25;
+  const tol = (TICK_TOLERANCE[instrument] || 10) * tv;
+  const distance = Math.abs(h4Level - vaLevel);
+  return { conterminous: distance <= tol, distance: +distance.toFixed(2), tolerance: +tol.toFixed(2) };
+}
+
+// ── H4 SWING ZONE DETECTION (GAP 2) ─────────────────────────────────────────
+function detectSwingZones(bars, atr) {
+  // bars = [{open, high, low, close}] — ideally H4 bars
+  if (!bars || bars.length < 5) return { supply: [], demand: [] };
+  const supply = [], demand = [];
+  for (let i = 2; i < bars.length - 2; i++) {
+    // Swing High (supply): high > 2 bars before AND 2 bars after
+    if (bars[i].high > bars[i-1].high && bars[i].high > bars[i-2].high &&
+        bars[i].high > bars[i+1].high && bars[i].high > bars[i+2].high) {
+      supply.push({ price_high: +bars[i].high.toFixed(2), price_low: +bars[i].open > bars[i].close ? +bars[i].close.toFixed(2) : +bars[i].open.toFixed(2) });
+    }
+    // Swing Low (demand): low < 2 bars before AND 2 bars after
+    if (bars[i].low < bars[i-1].low && bars[i].low < bars[i-2].low &&
+        bars[i].low < bars[i+1].low && bars[i].low < bars[i+2].low) {
+      demand.push({ price_high: +bars[i].open > bars[i].close ? +bars[i].open.toFixed(2) : +bars[i].close.toFixed(2), price_low: +bars[i].low.toFixed(2) });
+    }
+  }
+  // Cluster nearby zones (within 0.5 ATR)
+  const cluster = (zones, key) => {
+    if (zones.length === 0) return zones;
+    const threshold = atr > 0 ? atr * 0.5 : 999999;
+    const sorted = [...zones].sort((a, b) => a[key] - b[key]);
+    const clustered = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = clustered[clustered.length - 1];
+      if (Math.abs(sorted[i][key] - prev[key]) < threshold) {
+        // Merge: expand the zone
+        prev.price_high = Math.max(prev.price_high, sorted[i].price_high);
+        prev.price_low = Math.min(prev.price_low, sorted[i].price_low);
+        prev.strength = (prev.strength || 1) + 1;
+      } else {
+        clustered.push({ ...sorted[i], strength: 1 });
+      }
+    }
+    return clustered;
+  };
+  return {
+    supply: cluster(supply, 'price_high').map(z => ({ ...z, strength: z.strength || 1 })),
+    demand: cluster(demand, 'price_low').map(z => ({ ...z, strength: z.strength || 1 })),
+  };
+}
+
+function getNearestZones(zones, currentPrice, count) {
+  const above = zones.supply
+    .filter(z => z.price_low > currentPrice)
+    .sort((a, b) => a.price_low - b.price_low)
+    .slice(0, count)
+    .map(z => ({ ...z, distance: +(z.price_low - currentPrice).toFixed(2) }));
+  const below = zones.demand
+    .filter(z => z.price_high < currentPrice)
+    .sort((a, b) => b.price_high - a.price_high)
+    .slice(0, count)
+    .map(z => ({ ...z, distance: +(currentPrice - z.price_high).toFixed(2) }));
+  return { supply: above, demand: below };
+}
+
+async function fetchH4Bars(yahooSymbol) {
+  // Fetch 1h bars for 30 days, then group into 4h bars
+  const chart = await yahooChart(yahooSymbol, '1h', '30d');
+  const ts = chart.timestamp || [];
+  const q = chart.indicators?.quote?.[0] || {};
+  const hourBars = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (q.open?.[i] != null && q.high?.[i] != null && q.low?.[i] != null && q.close?.[i] != null) {
+      hourBars.push({ ts: ts[i], open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i] });
+    }
+  }
+  // Group into 4h bars
+  const h4Bars = [];
+  for (let i = 0; i < hourBars.length; i += 4) {
+    const group = hourBars.slice(i, Math.min(i + 4, hourBars.length));
+    if (group.length === 0) continue;
+    h4Bars.push({
+      ts: group[0].ts,
+      open: group[0].open,
+      high: Math.max(...group.map(b => b.high)),
+      low: Math.min(...group.map(b => b.low)),
+      close: group[group.length - 1].close,
+    });
+  }
+  return h4Bars;
+}
+
 function detectM30Pattern(bars, atr) {
   if (!bars || bars.length < 3) return 'None';
   const curr = bars[bars.length - 1];
@@ -1022,6 +1141,28 @@ app.get('/api/autosignal', async (req, res) => {
     const ibStatus = getIBStatus(sym);
     const ibWindow = getIBWindow(sym);
 
+    // ── H4 zones (GAP 2 + 4) ──
+    let h4Zones = { supply: [], demand: [] };
+    try {
+      const h4Bars = await fetchH4Bars(yahooSym);
+      const h4atr = calcATR(h4Bars, 14);
+      const rawZones = detectSwingZones(h4Bars, h4atr);
+      h4Zones = getNearestZones(rawZones, currentPrice, 3);
+    } catch (e) { console.warn('H4 zones failed:', e.message); }
+
+    // H4 QP = D1 QP (same quarterly pivot values, different timeframe context — GAP 1)
+    const h4Pivots = { ...d1Pivots };
+
+    // ── Conterminous checks (GAP 3) ──
+    const nearestDemand = h4Zones.demand[0];
+    const nearestSupply = h4Zones.supply[0];
+    const demandConterminous = nearestDemand
+      ? isConterminous(nearestDemand.price_high, va.vah, sym)
+      : { conterminous: false, distance: null, tolerance: (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25) };
+    const supplyConterminous = nearestSupply
+      ? isConterminous(nearestSupply.price_low, va.val, sym)
+      : { conterminous: false, distance: null, tolerance: (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25) };
+
     // ── Data object to return + send to AI ──
     const dataUsed = {
       vah: va.vah, val: va.val, poc: va.poc,
@@ -1034,6 +1175,16 @@ app.get('/api/autosignal', async (req, res) => {
       ib_extension: ibExtension,
       session,
       d1_qp: d1Pivots.qp, d1_qhi: d1Pivots.qhi, d1_qmid: d1Pivots.qmid, d1_qlo: d1Pivots.qlo,
+      h4_qp: h4Pivots.qp, h4_qhi: h4Pivots.qhi, h4_qmid: h4Pivots.qmid, h4_qlo: h4Pivots.qlo,
+      h4_supply_nearest: nearestSupply || null,
+      h4_demand_nearest: nearestDemand || null,
+      h4_supply_conterminous: supplyConterminous.conterminous,
+      h4_supply_distance_from_val: supplyConterminous.distance,
+      h4_demand_conterminous: demandConterminous.conterminous,
+      h4_demand_distance_from_vah: demandConterminous.distance,
+      conterminous_tolerance: demandConterminous.tolerance,
+      h4_supply_zones: h4Zones.supply,
+      h4_demand_zones: h4Zones.demand,
       today_high: +todayHigh.toFixed(2), today_low: +todayLow.toFixed(2),
       today_range: +todayRange.toFixed(2),
       yesterday_rth_bars: yesterdayRTH.length,
@@ -1056,8 +1207,20 @@ VALUE AREA (TPO-based, yesterday RTH 30min bars, ${yesterdayRTH.length} periods)
 - POC: ${dataUsed.poc}
 - VA Open: ${dataUsed.va_open}
 
-QUARTERLY PIVOTS (D1):
-- QP: ${dataUsed.d1_qp} | QHi: ${dataUsed.d1_qhi} | QMid: ${dataUsed.d1_qmid} | QLo: ${dataUsed.d1_qlo}
+QUARTERLY PIVOTS:
+- D1: QP: ${dataUsed.d1_qp} | QHi: ${dataUsed.d1_qhi} | QMid: ${dataUsed.d1_qmid} | QLo: ${dataUsed.d1_qlo}
+- H4: QP: ${dataUsed.h4_qp} | QHi: ${dataUsed.h4_qhi} | QMid: ${dataUsed.h4_qmid} | QLo: ${dataUsed.h4_qlo}
+
+H4 SUPPLY/DEMAND ZONES (auto-detected from swing highs/lows):
+- Nearest Supply (above): ${dataUsed.h4_supply_nearest ? `${dataUsed.h4_supply_nearest.price_low}-${dataUsed.h4_supply_nearest.price_high} (distance: ${dataUsed.h4_supply_nearest.distance})` : 'None detected'}
+- Nearest Demand (below): ${dataUsed.h4_demand_nearest ? `${dataUsed.h4_demand_nearest.price_high}-${dataUsed.h4_demand_nearest.price_low} (distance: ${dataUsed.h4_demand_nearest.distance})` : 'None detected'}
+- All Supply: ${dataUsed.h4_supply_zones.map(z => `${z.price_low}-${z.price_high}`).join(' | ') || 'None'}
+- All Demand: ${dataUsed.h4_demand_zones.map(z => `${z.price_low}-${z.price_high}`).join(' | ') || 'None'}
+
+CONTERMINOUS CHECK (pre-calculated, tolerance: ${dataUsed.conterminous_tolerance} pts):
+- H4 Demand vs VAH: ${dataUsed.h4_demand_conterminous ? 'CONTERMINOUS' : 'NOT conterminous'} (distance: ${dataUsed.h4_demand_distance_from_vah ?? 'N/A'} pts)
+- H4 Supply vs VAL: ${dataUsed.h4_supply_conterminous ? 'CONTERMINOUS' : 'NOT conterminous'} (distance: ${dataUsed.h4_supply_distance_from_val ?? 'N/A'} pts)
+NOTE: Conterminous values are pre-validated mathematically. Use these directly — do not re-evaluate.
 
 INITIAL BALANCE (${dataUsed.ib_window} — ${dataUsed.ib_status}):
 - IB High: ${dataUsed.ib_high || 'Not yet formed'}
@@ -1114,6 +1277,24 @@ Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using AT
   } catch (err) {
     console.error('AutoSignal error:', err);
     res.status(500).json({ error: err.message, symbol: sym });
+  }
+});
+
+// ── /api/h4-zones — H4 Supply/Demand Zone Detection ─────────────────────────
+app.get('/api/h4-zones', async (req, res) => {
+  const symbol = req.query.symbol || 'ES=F';
+  const currentPrice = parseFloat(req.query.current_price) || 0;
+  const instrument = req.query.instrument || 'ES';
+
+  try {
+    const h4Bars = await fetchH4Bars(symbol);
+    const atr = calcATR(h4Bars, 14);
+    const rawZones = detectSwingZones(h4Bars, atr);
+    const nearest = getNearestZones(rawZones, currentPrice, 3);
+    res.json({ success: true, supply: nearest.supply, demand: nearest.demand, h4_bars_count: h4Bars.length, atr_h4: +atr.toFixed(2) });
+  } catch (err) {
+    console.error('H4 zones error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

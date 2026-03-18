@@ -655,6 +655,9 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
             ["VAH", dataUsed.vah], ["VAL", dataUsed.val], ["POC", dataUsed.poc],
             ["ATR", dataUsed.atr], ["ADR", dataUsed.adr],
             ["IB Hi", dataUsed.ib_high], ["IB Lo", dataUsed.ib_low], ["IB", dataUsed.ib_status || dataUsed.ib_window],
+            ["H4 QP", dataUsed.h4_qp],
+            ["Dem\u2194VAH", dataUsed.h4_demand_conterminous ? "\u2713 CTM" : dataUsed.h4_demand_distance_from_vah != null ? `${dataUsed.h4_demand_distance_from_vah}pt` : null],
+            ["Sup\u2194VAL", dataUsed.h4_supply_conterminous ? "\u2713 CTM" : dataUsed.h4_supply_distance_from_val != null ? `${dataUsed.h4_supply_distance_from_val}pt` : null],
             ["Trend", dataUsed.trend], ["Pattern", dataUsed.m30_pattern],
             ["Session", dataUsed.session],
           ].map(([k, v]) => (
@@ -663,6 +666,24 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
               background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)",
               color: v && v !== 0 && v !== "None" && v !== "NONE" && v !== "NEUTRAL" ? "#64748b" : "#1e293b",
             }}>{k}: {v ?? "—"}</span>
+          ))}
+        </div>
+      )}
+
+      {/* H4 Supply/Demand zones */}
+      {dataUsed && (dataUsed.h4_supply_zones?.length > 0 || dataUsed.h4_demand_zones?.length > 0) && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+          {(dataUsed.h4_supply_zones || []).map((z, i) => (
+            <span key={`s${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+              background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.15)", color: "#ff4d6d" }}>
+              Supply: {z.price_low}–{z.price_high}
+            </span>
+          ))}
+          {(dataUsed.h4_demand_zones || []).map((z, i) => (
+            <span key={`d${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+              background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.15)", color: "#00d4aa" }}>
+              Demand: {z.price_low}–{z.price_high}
+            </span>
           ))}
         </div>
       )}
@@ -1126,13 +1147,48 @@ function AISignalAnalyser({ chartData }) {
         <div><div style={labelStyle}>QLo</div><input style={inputStyle} value={form.d1QLo} onChange={e => set("d1QLo", e.target.value)} /></div>
       </div>
 
-      <div style={sectionStyle}>H4 QUARTERLY PIVOTS</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={sectionStyle}>H4 QUARTERLY PIVOTS</div>
+        <button onClick={() => { set("h4QP", form.d1QP); set("h4QHi", form.d1QHi); set("h4QMid", form.d1QMid); set("h4QLo", form.d1QLo); }}
+          style={{ fontSize: 7, fontFamily: MONO, color: "#4a9eff", background: "none", border: "1px solid rgba(74,158,255,0.2)", borderRadius: 3, padding: "1px 6px", cursor: "pointer" }}>
+          COPY D1 \u2192 H4
+        </button>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6 }}>
         <div><div style={labelStyle}>QP</div><input style={inputStyle} value={form.h4QP} onChange={e => set("h4QP", e.target.value)} /></div>
         <div><div style={labelStyle}>QHi</div><input style={inputStyle} value={form.h4QHi} onChange={e => set("h4QHi", e.target.value)} /></div>
         <div><div style={labelStyle}>QMid</div><input style={inputStyle} value={form.h4QMid} onChange={e => set("h4QMid", e.target.value)} /></div>
         <div><div style={labelStyle}>QLo</div><input style={inputStyle} value={form.h4QLo} onChange={e => set("h4QLo", e.target.value)} /></div>
       </div>
+
+      {/* Conterminous check */}
+      {form.vah && form.val && (form.h4QP || form.h4QHi || form.h4QMid || form.h4QLo) && (() => {
+        const TV = { ES: 0.25, NQ: 0.25, DAX: 1.0, XAU: 0.1, OIL: 0.01 };
+        const tv = TV[form.instrument] || 0.25;
+        const tol = 10 * tv;
+        const vah = parseFloat(form.vah), val = parseFloat(form.val);
+        const h4s = [form.h4QP, form.h4QHi, form.h4QMid, form.h4QLo].filter(Boolean).map(Number);
+        const nearVAH = h4s.reduce((b, l) => { const d = Math.abs(l - vah); return (!b || d < b.d) ? { l, d } : b; }, null);
+        const nearVAL = h4s.reduce((b, l) => { const d = Math.abs(l - val); return (!b || d < b.d) ? { l, d } : b; }, null);
+        return (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {nearVAH && (
+              <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                background: nearVAH.d <= tol ? "rgba(0,212,170,0.1)" : "rgba(255,77,109,0.08)",
+                color: nearVAH.d <= tol ? "#00d4aa" : "#ff4d6d",
+                border: `1px solid ${nearVAH.d <= tol ? "rgba(0,212,170,0.2)" : "rgba(255,77,109,0.15)"}`,
+              }}>{nearVAH.d <= tol ? "\u2713" : "\u2717"} Dem\u2194VAH: {nearVAH.d.toFixed(2)}pt (tol: {tol})</span>
+            )}
+            {nearVAL && (
+              <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                background: nearVAL.d <= tol ? "rgba(0,212,170,0.1)" : "rgba(255,77,109,0.08)",
+                color: nearVAL.d <= tol ? "#00d4aa" : "#ff4d6d",
+                border: `1px solid ${nearVAL.d <= tol ? "rgba(0,212,170,0.2)" : "rgba(255,77,109,0.15)"}`,
+              }}>{nearVAL.d <= tol ? "\u2713" : "\u2717"} Sup\u2194VAL: {nearVAL.d.toFixed(2)}pt (tol: {tol})</span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* IB */}
       <div style={sectionStyle}>INITIAL BALANCE (per instrument)</div>
