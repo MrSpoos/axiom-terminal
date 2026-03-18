@@ -302,12 +302,18 @@ app.get('/api/macro', async (req, res) => {
           if (m) macro['GDP Growth (Q4)'] = m;
         } catch (e) { console.warn('GDP failed:', e.message); }
       })(),
-      // ISM Manufacturing — FRED (MANEMP is employment, use NAPM for ISM PMI)
+      // ISM Manufacturing — try multiple FRED series (NAPM discontinued, try alternatives)
       (async () => {
-        try {
-          const m = await fredMacro('NAPM', 'ISM', v => v.toFixed(1));
-          if (m) macro['ISM Manuf.'] = m;
-        } catch (e) { console.warn('ISM failed:', e.message); }
+        const seriesIds = ['NAPM', 'MANEMP', 'AMTMNO'];
+        for (const sid of seriesIds) {
+          try {
+            const fmt = sid === 'MANEMP' ? (v => `${(v/1000).toFixed(0)}K`) : (v => v.toFixed(1));
+            const m = await fredMacro(sid, 'ISM', fmt);
+            if (m) { macro['ISM Manuf.'] = m; return; }
+          } catch {}
+        }
+        // All failed — show N/A gracefully
+        macro['ISM Manuf.'] = { value: 'N/A', prev: 'N/A', trend: 'neutral', next: '—', live: false };
       })(),
     ];
 

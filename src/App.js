@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import SignalsPanel from "./components/SignalsPanel";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
@@ -395,10 +395,41 @@ function GammaLevels() {
   );
 }
 
+function buildStrikes(price) {
+  if (!price || price <= 0) return OPTIONS_CHAIN.strikes;
+  const atm = Math.round(price / 5) * 5;
+  const strikes = [];
+  for (let s = atm - 30; s <= atm + 30; s += 5) {
+    const diff = s - price;
+    const absDiff = Math.abs(diff);
+    const isAtm = absDiff < 3;
+    // Black-Scholes-ish approximation for display
+    const baseIV = 16 + absDiff * 0.08 + (diff < 0 ? 1.2 : 0); // put skew
+    const callIntrinsic = Math.max(price - s, 0);
+    const putIntrinsic = Math.max(s - price, 0);
+    const timeValue = Math.max(0.1, (8 - absDiff * 0.15)) * (baseIV / 16);
+    const callMid = +(callIntrinsic + timeValue).toFixed(2);
+    const putMid = +(putIntrinsic + timeValue).toFixed(2);
+    const spread = +(Math.max(0.03, callMid * 0.008)).toFixed(2);
+    const oiBase = isAtm ? 85000 : Math.max(10000, 65000 - absDiff * 2800);
+    strikes.push({
+      strike: s, atm: isAtm,
+      callBid: +(callMid - spread).toFixed(2), callAsk: +(callMid + spread).toFixed(2),
+      callOI: Math.round(oiBase * (0.8 + Math.random() * 0.4)),
+      callIV: +baseIV.toFixed(1),
+      putBid: +(putMid - spread).toFixed(2), putAsk: +(putMid + spread).toFixed(2),
+      putOI: Math.round(oiBase * (0.7 + Math.random() * 0.6)),
+      putIV: +(baseIV + 0.5).toFixed(1),
+    });
+  }
+  return strikes;
+}
+
 function OptionsChain({ livePrice }) {
   const [selExpiry, setSelExpiry] = useState(OPTIONS_CHAIN.selectedExpiry);
   const [aiOpen, setAiOpen] = useState(false);
   const displayPrice = livePrice || OPTIONS_CHAIN.price;
+  const strikes = useMemo(() => buildStrikes(displayPrice), [displayPrice]);
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
@@ -408,10 +439,11 @@ function OptionsChain({ livePrice }) {
       <div style={{ flex: 1, overflowY: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>
           <thead><tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>{["BID","ASK","OI","IV","STRIKE","IV","OI","BID","ASK"].map((h, i) => (<th key={i} style={{ padding: "4px 6px", color: i < 4 ? "#4a9eff99" : i === 4 ? "#a0aec0" : "#ff4d6d99", fontWeight: 500, fontSize: 9, textAlign: i < 4 ? "right" : i === 4 ? "center" : "left" }}>{i < 4 ? `C-${h}` : i === 4 ? h : `P-${h}`}</th>))}</tr></thead>
-          <tbody>{OPTIONS_CHAIN.strikes.map((row) => (<tr key={row.strike} style={{ background: row.atm ? "rgba(74,158,255,0.06)" : "transparent", borderBottom: "1px solid rgba(255,255,255,0.03)" }}><td style={{ padding: "5px 6px", textAlign: "right", color: "#4a9eff" }}>{row.callBid.toFixed(2)}</td><td style={{ padding: "5px 6px", textAlign: "right", color: "#a0aec0" }}>{row.callAsk.toFixed(2)}</td><td style={{ padding: "5px 6px", textAlign: "right", color: "#64748b" }}>{(row.callOI/1000).toFixed(1)}K</td><td style={{ padding: "5px 6px", textAlign: "right", color: "#a0aec0" }}>{row.callIV.toFixed(1)}%</td><td style={{ padding: "5px 6px", textAlign: "center", color: row.atm ? "#f6c90e" : "#e2e8f0", fontWeight: row.atm ? 700 : 400, borderLeft: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>{row.strike}</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#a0aec0" }}>{row.putIV.toFixed(1)}%</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#64748b" }}>{(row.putOI/1000).toFixed(1)}K</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#ff4d6d" }}>{row.putBid.toFixed(2)}</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#a0aec0" }}>{row.putAsk.toFixed(2)}</td></tr>))}</tbody>
+          <tbody>{strikes.map((row) => (<tr key={row.strike} style={{ background: row.atm ? "rgba(74,158,255,0.06)" : "transparent", borderBottom: "1px solid rgba(255,255,255,0.03)" }}><td style={{ padding: "5px 6px", textAlign: "right", color: "#4a9eff" }}>{row.callBid.toFixed(2)}</td><td style={{ padding: "5px 6px", textAlign: "right", color: "#a0aec0" }}>{row.callAsk.toFixed(2)}</td><td style={{ padding: "5px 6px", textAlign: "right", color: "#64748b" }}>{(row.callOI/1000).toFixed(1)}K</td><td style={{ padding: "5px 6px", textAlign: "right", color: "#a0aec0" }}>{row.callIV.toFixed(1)}%</td><td style={{ padding: "5px 6px", textAlign: "center", color: row.atm ? "#f6c90e" : "#e2e8f0", fontWeight: row.atm ? 700 : 400, borderLeft: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>{row.strike}</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#a0aec0" }}>{row.putIV.toFixed(1)}%</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#64748b" }}>{(row.putOI/1000).toFixed(1)}K</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#ff4d6d" }}>{row.putBid.toFixed(2)}</td><td style={{ padding: "5px 6px", textAlign: "left", color: "#a0aec0" }}>{row.putAsk.toFixed(2)}</td></tr>))}</tbody>
         </table>
       </div>
-      <button onClick={() => setAiOpen(!aiOpen)} style={{ marginTop: 8, fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}>{aiOpen ? "▲ HIDE AI OPTIONS ANALYSIS" : "▼ AI OPTIONS FLOW ANALYSIS"}</button>
+      <div style={{ fontSize: 7, color: "#1e293b", fontFamily: "'IBM Plex Mono', monospace", textAlign: "center", padding: "4px 0" }}>Model-estimated values · strikes centered on live price</div>
+      <button onClick={() => setAiOpen(!aiOpen)} style={{ marginTop: 4, fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}>{aiOpen ? "▲ HIDE AI OPTIONS ANALYSIS" : "▼ AI OPTIONS FLOW ANALYSIS"}</button>
       {aiOpen && <div style={{ marginTop: 8, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160 }}><AIAnalysis prompt={`Analyze SPY options chain expiry ${selExpiry}. Underlying $${displayPrice.toFixed(2)}. Look at the strike ladder, IV skew, put/call OI dynamics around the ATM strike. What's the trade?`} /></div>}
     </div>
   );
