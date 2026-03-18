@@ -12,15 +12,16 @@ const DEFAULT_TICKERS = [
   { sym: "GLD", name: "Gold ETF", price: 0, chg: 0, pct: 0 },
   { sym: "TLT", name: "20Y Treasury ETF", price: 0, chg: 0, pct: 0 },
 ];
+// Fallback only — live data from /api/macro overrides these when available
 const ECONOMIC_DATA_STATIC = [
-  { name: "Fed Funds Rate", value: "5.25–5.50%", prev: "5.25–5.50%", trend: "neutral", next: "Jun 12" },
-  { name: "CPI YoY", value: "3.2%", prev: "3.4%", trend: "down", next: "Apr 10" },
-  { name: "Core PCE", value: "2.8%", prev: "2.9%", trend: "down", next: "Mar 29" },
-  { name: "Unemployment", value: "3.7%", prev: "3.7%", trend: "neutral", next: "Apr 5" },
-  { name: "GDP Growth (Q4)", value: "3.2%", prev: "2.4%", trend: "up", next: "Mar 28" },
-  { name: "10Y Treasury", value: "4.31%", prev: "4.18%", trend: "up", next: "Live" },
-  { name: "2Y Treasury", value: "4.69%", prev: "4.62%", trend: "up", next: "Live" },
-  { name: "ISM Manuf.", value: "47.8", prev: "49.1", trend: "down", next: "Apr 1" },
+  { name: "Fed Funds Rate", value: "—", prev: "—", trend: "neutral", next: "—" },
+  { name: "CPI YoY", value: "—", prev: "—", trend: "neutral", next: "—" },
+  { name: "Core PCE", value: "—", prev: "—", trend: "neutral", next: "—" },
+  { name: "Unemployment", value: "—", prev: "—", trend: "neutral", next: "—" },
+  { name: "GDP Growth (Q4)", value: "—", prev: "—", trend: "neutral", next: "—" },
+  { name: "10Y Treasury", value: "—", prev: "—", trend: "neutral", next: "Live" },
+  { name: "2Y Treasury", value: "—", prev: "—", trend: "neutral", next: "Live" },
+  { name: "ISM Manuf.", value: "—", prev: "—", trend: "neutral", next: "—" },
 ];
 const OPTIONS_CHAIN = {
   underlying: "SPY", price: 527.43,
@@ -425,7 +426,11 @@ function EconomicIndicators({ macroLive = {} }) {
   const tenY  = data.find(d => d.name === "10Y Treasury");
   const twoY  = data.find(d => d.name === "2Y Treasury");
   const ffr   = data.find(d => d.name === "Fed Funds Rate");
-  const macroPrompt = `Fed at ${ffr?.value || "5.25%"}, CPI 3.2%, GDP 3.2%, unemployment 3.7%, 10Y at ${tenY?.value || "4.31%"}, 2Y at ${twoY?.value || "4.69%"}, ISM 47.8. Macro regime, rate cut timing, key equity risks, best sectors?`;
+  const cpi  = data.find(d => d.name === "CPI YoY");
+  const gdp  = data.find(d => d.name === "GDP Growth (Q4)");
+  const unem = data.find(d => d.name === "Unemployment");
+  const ism  = data.find(d => d.name === "ISM Manuf.");
+  const macroPrompt = `Fed Funds at ${ffr?.value || "unknown"}, CPI ${cpi?.value || "unknown"}, GDP ${gdp?.value || "unknown"}, unemployment ${unem?.value || "unknown"}, 10Y at ${tenY?.value || "unknown"}, 2Y at ${twoY?.value || "unknown"}, ISM ${ism?.value || "unknown"}. Macro regime, rate outlook, key equity risks, best sectors?`;
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ flex: 1, overflowY: "auto" }}>

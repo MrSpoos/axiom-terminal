@@ -267,6 +267,9 @@ app.get('/api/macro', async (req, res) => {
 // ── /api/ai — Claude streaming proxy ─────────────────────────────────────────
 // Keeps the Anthropic key server-side; streams SSE back to the browser.
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+function todayDateStr() {
+  return new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+}
 const DEFAULT_SYSTEM = "You are a senior macro strategist and options trader at a top hedge fund. Provide sharp, data-driven market commentary in Bloomberg terminal style. Use specific numbers. Format with ALL CAPS headers. Under 300 words.";
 
 app.post('/api/ai', async (req, res) => {
@@ -295,7 +298,7 @@ app.post('/api/ai', async (req, res) => {
         model: 'claude-sonnet-4-20250514',
         max_tokens: maxTokens,
         stream: true,
-        system: systemPrompt || DEFAULT_SYSTEM,
+        system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${systemPrompt || DEFAULT_SYSTEM}`,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
@@ -411,7 +414,7 @@ Calculate stop and targets using the ATR value provided. Apply the playbook rule
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
-        system: SIGNALS_SYSTEM,
+        system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${SIGNALS_SYSTEM}`,
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
@@ -806,7 +809,7 @@ Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using AT
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
-        system: AUTOSIGNAL_SYSTEM,
+        system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${AUTOSIGNAL_SYSTEM}`,
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
