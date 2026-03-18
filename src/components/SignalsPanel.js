@@ -760,6 +760,22 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
             </div>
           )}
 
+          {/* Conterminous used */}
+          {result.conterminous_used && (
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3,
+                background: result.conterminous_used.demand_conterminous ? "rgba(0,212,170,0.1)" : "rgba(255,77,109,0.08)",
+                color: result.conterminous_used.demand_conterminous ? "#00d4aa" : "#ff4d6d",
+                border: `1px solid ${result.conterminous_used.demand_conterminous ? "rgba(0,212,170,0.2)" : "rgba(255,77,109,0.15)"}`,
+              }}>{result.conterminous_used.demand_conterminous ? "\u2713" : "\u2717"} Dem\u2194VAH {result.conterminous_used.demand_level ? `@ ${result.conterminous_used.demand_level}` : ""}</span>
+              <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3,
+                background: result.conterminous_used.supply_conterminous ? "rgba(0,212,170,0.1)" : "rgba(255,77,109,0.08)",
+                color: result.conterminous_used.supply_conterminous ? "#00d4aa" : "#ff4d6d",
+                border: `1px solid ${result.conterminous_used.supply_conterminous ? "rgba(0,212,170,0.2)" : "rgba(255,77,109,0.15)"}`,
+              }}>{result.conterminous_used.supply_conterminous ? "\u2713" : "\u2717"} Sup\u2194VAL {result.conterminous_used.supply_level ? `@ ${result.conterminous_used.supply_level}` : ""}</span>
+            </div>
+          )}
+
           {/* R target prices */}
           {result.stop && (
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>

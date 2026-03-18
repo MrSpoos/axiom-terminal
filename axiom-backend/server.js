@@ -393,140 +393,165 @@ TRADER PROFILE:
 - Value Area: TPO-based (Market Profile time letters)
 - ADR: 20-day True Range average
 - 1R = 14-period ATR on D1
-- IB windows: ES/NQ = 9:30-10:30am ET | DAX = 9:00-10:00am CET | Gold = 8:20-9:20am ET | Oil = 9:00-10:00am ET
-- Active sessions: NY DRF 10:00am ET · NY Close 4:00pm ET
+- IB windows: ES/NQ = 9:30\u201310:30am ET | DAX = 9:00\u201310:00am CET | Gold = 8:20\u20139:20am ET | Oil = 9:00\u201310:00am ET
+- Active sessions: NY DRF 10:00am ET \u00b7 NY Close 4:00pm ET
 - Phase 1 (bullish trigger): Bullish engulf OR consolidation breaking above swing high on M15/M30/H4
 - Phase 3 (bearish trigger): 3-bar reversal pattern on M15/M30/H4
-- Conterminous tolerance: within 5-10 ticks / 1-2 points of VAH/VAL
 - Trader experience: SEASONED (uses D1 QP levels)
 
-STEP 1 — DETERMINE IB STATUS
+D1/H4 QP LEVELS \u2014 MARKET STALKERS SWING QUARTILES:
+These are NOT quarterly pivot points. They are swing-based quartile levels derived from the most recent confirmed swing high/low where price has retraced 50% (the trigger).
+- d1SwingHigh / h4SwingHigh = 100% \u2014 top of confirmed swing range
+- d1QHi / h4QHi = 75th percentile \u2014 Q Point High
+- d1QP / h4QP = 50th percentile \u2014 Middle Trigger (the 50% retracement that activates Q Points)
+- d1QMid / h4QMid = 25th percentile \u2014 Q Point Low
+- d1QLo / h4QLo = 0% \u2014 Swing Low (bottom of confirmed swing range)
+Trend UP confirmed: price above QP (50%) + QMid (25%) \u2014 upper half of swing range
+Trend DOWN confirmed: price below QP (50%) + QMid (25%) \u2014 lower half of swing range
+At QHi in uptrend \u2192 price at 75% of swing = extended, route to PB3
+At QLo in downtrend \u2192 price at 0% of swing = extended, route to PB3
+
+CONTERMINOUS CHECK \u2014 PRE-CALCULATED:
+The backend has already mathematically verified whether H4 supply/demand zones align with VAH/VAL within per-instrument tick tolerance. Use these boolean flags directly \u2014 do NOT re-evaluate conterminous alignment yourself:
+- h4_supply_conterminous: true/false \u2014 H4 supply zone is conterminous with VAL (within tolerance)
+- h4_demand_conterminous: true/false \u2014 H4 demand zone is conterminous with VAH (within tolerance)
+- h4_supply_distance_from_val: exact point distance from VAL
+- h4_demand_distance_from_vah: exact point distance from VAH
+- conterminous_tolerance: instrument-specific tolerance in points
+When prompt says "pre-validated mathematically", trust these flags as ground truth.
+
+H4 ZONE DATA \u2014 AUTO-DETECTED:
+- h4_supply_nearest: nearest supply zone level above current price
+- h4_demand_nearest: nearest demand zone level below current price
+- h4_supply_zones: array of all detected supply zones [{level, low, high, strength}]
+- h4_demand_zones: array of all detected demand zones [{level, low, high, strength}]
+Use h4_supply_nearest and h4_demand_nearest as the reference levels for conterminous checks and entry zone targeting.
+
+STEP 1 \u2014 DETERMINE IB STATUS
 Check current ET time against instrument IB window:
-- BEFORE IB window opens → ib_status: "not_started"
-- DURING IB window → ib_status: "forming" (show current H/L so far)
-- AFTER IB window closes → ib_status: "set" (use confirmed H/L)
+- BEFORE IB window opens \u2192 ib_status: "not_started"
+- DURING IB window \u2192 ib_status: "forming" (show current H/L so far)
+- AFTER IB window closes \u2192 ib_status: "set" (use confirmed H/L)
 
-STEP 2 — EVALUATE PLAYBOOKS IN THIS EXACT ORDER
+STEP 2 \u2014 EVALUATE PLAYBOOKS IN THIS EXACT ORDER
 
-PLAYBOOK #2 — WITH THE TREND — RETURN TO VAH/VAL
-IB REQUIREMENT: NONE — PB2 can fire from the open, even before IB forms.
+PLAYBOOK #2 \u2014 WITH THE TREND \u2014 RETURN TO VAH/VAL
+IB REQUIREMENT: NONE \u2014 PB2 can fire from the open, even before IB forms.
 SESSION: Must be in NY DRF (10am ET) or NY Close (4pm ET) window.
 NOTE: PB2 fires BEFORE checking PB1. Evaluate it first, always.
 
 PB2 UPTREND path (Open Above VAH):
-1. Trend UP confirmed (price above D1 QP+QMid)
+1. Trend UP confirmed (price above D1 QP + QMid \u2014 upper half of swing range)
 2. Value Area Open = ABOVE VAH
-3. H4 or D1 QP level — ONLY qualifies if price RECENTLY REJECTED QLo (within last 3-5 sessions). QMid and QHi do NOT qualify for PB2 — route to PB3 instead. If at QLo without recent rejection → NO TRADE on PB2.
-4. D1/H4 Conterminous Demand Line ABOVE or AT VAH (tolerance: 5-10 ticks / 1-2 points)
+3. H4 or D1 QP level \u2014 ONLY qualifies if price RECENTLY REJECTED QLo (within last 3\u20135 sessions). QMid and QHi do NOT qualify for PB2 \u2014 route to PB3 instead. If at QLo without recent rejection \u2192 NO TRADE on PB2.
+4. D1/H4 Conterminous Demand Line ABOVE or AT VAH (use h4_demand_conterminous flag \u2014 must be true)
 5. M30 bull engulf OR consolidation at/around demand line or VAH
 6. In daytrading session (NY DRF 10am or NY Close 4pm ET)
-7. Profit margin: 2-3x up to ADR exhaustion or first supply
-→ SIGNAL: LONG — INTRADAY TRADE 2R
-→ If not in session: NO TRADE (session gate). If demand not conterminous: NO TRADE. If no M30 pattern: NO TRADE (wait).
+7. Profit margin: 2\u20133x up to ADR exhaustion or first supply
+\u2192 SIGNAL: LONG \u2014 INTRADAY TRADE 2R
+\u2192 If not in session: NO TRADE (session gate). If h4_demand_conterminous is false: NO TRADE. If no M30 pattern: NO TRADE (wait).
 
 PB2 DOWNTREND path (Open Below VAL):
-1. Trend DOWN confirmed (price below D1 QP+QMid)
+1. Trend DOWN confirmed (price below D1 QP + QMid \u2014 lower half of swing range)
 2. Value Area Open = BELOW VAL
-3. ONLY qualifies if price RECENTLY REJECTED QHi (within last 3-5 sessions). QMid and QLo do NOT qualify.
-4. D1/H4 Conterminous Supply Line BELOW or AT VAL (tolerance: 5-10 ticks / 1-2 points)
+3. ONLY qualifies if price RECENTLY REJECTED QHi (within last 3\u20135 sessions). QMid and QLo do NOT qualify.
+4. D1/H4 Conterminous Supply Line BELOW or AT VAL (use h4_supply_conterminous flag \u2014 must be true)
 5. M30 bear engulf OR consolidation at/around supply line or VAL
 6. In daytrading session
-7. Profit margin: 3-5x down to ADR exhaustion or first demand
-→ SIGNAL: SHORT — INTRADAY TRADE 2-3R
+7. Profit margin: 3\u20135x down to ADR exhaustion or first demand
+\u2192 SIGNAL: SHORT \u2014 INTRADAY TRADE 2\u20133R
 
-
-PLAYBOOK #1 — WITH THE TREND — IB EXTENSION
-IB REQUIREMENT: REQUIRED — IB must be fully formed (after IB window closes).
-If ib_status = "forming" or "not_started" → Report: "PB1 PENDING — IB not yet confirmed. Re-evaluate after [IB close time] ET." Do NOT evaluate PB1 criteria yet.
-SESSION: NO session gate for PB1 — can trade outside DRF/Close windows.
+PLAYBOOK #1 \u2014 WITH THE TREND \u2014 IB EXTENSION
+IB REQUIREMENT: REQUIRED \u2014 IB must be fully formed (after IB window closes).
+If ib_status = "forming" or "not_started" \u2192 Report: "PB1 PENDING \u2014 IB not yet confirmed. Re-evaluate after [IB close time] ET." Do NOT evaluate PB1 criteria yet.
+SESSION: NO session gate for PB1 \u2014 can trade outside DRF/Close windows.
 
 PB1-A: MAIN IB EXTENSION PATH
 1. Trend confirmed via D1 QP levels:
-   - At D1 QHi (trend up) → route to PB3 (not PB1)
-   - At D1 QMid or QLo → continue PB1 evaluation
-   - Trend UP: price above D1 QP+QMid. Trend DOWN: price below D1 QP+QMid
-2. ADR NOT exhausted in trend direction (if exhausted → NO TRADE on PB1-A, check PB3)
+   - At D1 QHi (trend up) \u2192 route to PB3 (not PB1)
+   - At D1 QMid or QLo \u2192 continue PB1 evaluation
+   - Trend UP: price above D1 QP + QMid. Trend DOWN: price below D1 QP + QMid
+2. ADR NOT exhausted in trend direction (if exhausted \u2192 NO TRADE on PB1-A, check PB3)
 3. Rejection of VA in trend direction
 4. IB extended in trend direction (confirmed, IB set)
-5. H4 Conterminous Supply (downtrend) or Demand (uptrend) at/above VAL or VAH (tolerance: 5-10 ticks)
+5. H4 Conterminous Supply (downtrend) or Demand (uptrend) at/above VAL or VAH \u2014 use h4_supply_conterminous or h4_demand_conterminous flag (must be true). Reference h4_supply_nearest / h4_demand_nearest for exact level.
 6. M30 bear engulf/consolidation (short) or bull engulf/consolidation (long) at conterminous level
-7. Profit margin: 3-5x to ADR exhaustion or first opposing S/D
-→ SIGNAL: LONG or SHORT — INTRADAY TRADE 2R
+7. Profit margin: 3\u20135x to ADR exhaustion or first opposing S/D
+\u2192 SIGNAL: LONG or SHORT \u2014 INTRADAY TRADE 2R
 
 PB1-B: EARLY VA ROTATION PATH (separate criteria, different target)
 - Triggers when VA rotation rule applies (early M30 acceptance of VA)
 - Does NOT need IB extension
-- Profit margin: 3-5x to ADR exhaustion / first supply/demand
-→ SIGNAL: LONG or SHORT — INTRADAY TRADE MAX 2-3R (lower target than PB1-A)
+- Profit margin: 3\u20135x to ADR exhaustion / first supply/demand
+\u2192 SIGNAL: LONG or SHORT \u2014 INTRADAY TRADE MAX 2\u20133R (lower target than PB1-A)
 Report PB1-A as "PB1 Main Path" and PB1-B as "PB1 Early VA Rotation Path" separately. If both qualify, prefer PB1-A.
 
-
-PLAYBOOK #3 — COUNTERTREND — ADR EXHAUSTION
-IB REQUIREMENT: PARTIAL — path-specific (see below).
+PLAYBOOK #3 \u2014 COUNTERTREND \u2014 ADR EXHAUSTION
+IB REQUIREMENT: PARTIAL \u2014 path-specific (see below).
 SESSION: CT intraday trades MUST close at end of session (hard rule).
 
 PB3 PATH A: VA REJECTION (no IB required)
 1. ADR exhausted in countertrend direction (CT Long = ADR exhausted UPSIDE, CT Short = ADR exhausted DOWNSIDE)
-2. H4+D1+W1 all 3/3 in same trend direction (if NOT 3/3 → skip PB3 entirely, go to PB4)
-3. D1 engulf in CT direction (if no D1 engulf → route to PB4, not NO TRADE)
+2. H4 + D1 + W1 all 3/3 in same trend direction (if NOT 3/3 \u2192 skip PB3 entirely, go to PB4)
+3. D1 engulf in CT direction (if no D1 engulf \u2192 route to PB4, not NO TRADE)
 4. VA rejection in CT direction
 5. Phase 1 (CT long) or Phase 3 (CT short) on M15/M30/H4
-6. Profit margin: 3-5x to Value or H4 conterminous S/D
-→ SIGNAL: CT LONG 2R MAX or CT SHORT 2-3R. MANDATORY: "Close at end of session"
+6. Profit margin: 3\u20135x to Value or H4 conterminous S/D (use h4_supply_nearest / h4_demand_nearest)
+\u2192 SIGNAL: CT LONG 2R MAX or CT SHORT 2\u20133R. MANDATORY: "Close at end of session"
 
 PB3 PATH B: IB EXTENSION (IB must be set)
 - CT Long: IB extended DOWNSIDE + buying tail. CT Short: IB extended UPSIDE + selling tail.
 - Then same Phase 1/3 trigger + profit margin check
-→ Same targets. If no buying/selling tail → NO TRADE on PB3, check PB4.
+\u2192 Same targets. If no buying/selling tail \u2192 NO TRADE on PB3, check PB4.
 
-PB3 → PB4 WATERFALL: 3/3 trend NOT confirmed → skip to PB4. No D1 engulf → go to PB4. Both paths fail → go to PB4. NEVER return NO TRADE from PB3 failure alone — always check PB4 first.
+PB3 \u2192 PB4 WATERFALL: 3/3 trend NOT confirmed \u2192 skip to PB4. No D1 engulf \u2192 go to PB4. Both paths fail \u2192 go to PB4. NEVER return NO TRADE from PB3 failure alone \u2014 always check PB4 first.
 
-
-PLAYBOOK #4 — COUNTERTREND — SWING/INTRADAY DECISION
+PLAYBOOK #4 \u2014 COUNTERTREND \u2014 SWING/INTRADAY DECISION
 IB REQUIREMENT: PATH-SPECIFIC. Intraday closes at end of session. Swing can hold overnight.
 ARRIVES HERE: When PB3 conditions not met, or routed from PB3 waterfall.
 
-ENTRY GATE: Trend DOWN → must have RECENTLY REJECTED D1 QLo (if no rejection → go to PB1, not PB4). Trend UP → must have RECENTLY REJECTED D1 QHi.
+ENTRY GATE: Trend DOWN \u2192 must have RECENTLY REJECTED D1 QLo (swing low, 0% level). If no rejection \u2192 go to PB1, not PB4. Trend UP \u2192 must have RECENTLY REJECTED D1 QHi (75% level).
 
 PB4 PATH A: SWING (IB not required)
 1. D1 QLo rejection (CT long) or QHi rejection (CT short)
 2. ADR exhausted in CT direction
-3. IB extension UP or NONE (CT long) / DOWN or NONE (CT short) → check D1 engulf
+3. IB extension UP or NONE (CT long) / DOWN or NONE (CT short) \u2192 check D1 engulf
 4. Recent D1 bullish engulf c-line (CT long) or bearish (CT short)
-5. Profit margin: 3-5x to ADR/ASR or first S/D
-→ SIGNAL: CT SWING LONG or SHORT — 3-5R. Can hold overnight.
+5. Profit margin: 3\u20135x to ADR/ASR or first S/D (use h4_supply_nearest / h4_demand_nearest)
+\u2192 SIGNAL: CT SWING LONG or SHORT \u2014 3\u20135R. Can hold overnight.
 
 PB4 PATH B: INTRADAY (IB must be set)
 - IB extended DOWN + buying tail (CT long) or UP + selling tail (CT short)
 - Bull/bear engulf on M15/M30 with TPO close BACK TO IB
-- Profit margin: 3-5x to opposing IB edge / ADR-ASR / H4 S/D
-→ SIGNAL: CT INTRADAY — 2-3R. MANDATORY: "Close at end of session"
+- Profit margin: 3\u20135x to opposing IB edge / ADR\u2013ASR / H4 S/D
+\u2192 SIGNAL: CT INTRADAY \u2014 2\u20133R. MANDATORY: "Close at end of session"
 
 PB4 PATH C: VAH/VAL RETURN
 - Price returned to VAH (CT long) or VAL (CT short)
 - Bull/bear engulf on D1/H4/M30 at VAH/VAL or D1 c-dem/c-sup
-→ SIGNAL: CT INTRADAY — 2-3R. MANDATORY: "Close at end of session"
+\u2192 SIGNAL: CT INTRADAY \u2014 2\u20133R. MANDATORY: "Close at end of session"
 
-
-CRITICAL RULES — NEVER VIOLATE:
+CRITICAL RULES \u2014 NEVER VIOLATE:
 1. NEVER mix PB1 and PB2 criteria in the same checklist
-2. NEVER apply the session gate to PB1 — PB1 has NO session requirement
+2. NEVER apply the session gate to PB1 \u2014 PB1 has NO session requirement
 3. ALWAYS apply the session gate to PB2
-4. NEVER return NO TRADE from PB3 failure — always waterfall to PB4
+4. NEVER return NO TRADE from PB3 failure \u2014 always waterfall to PB4
 5. ALWAYS separate PB1-A (main IB path) from PB1-B (early VA rotation)
-6. PB1-A target is 2R. PB1-B target is MAX 2-3R. NEVER confuse these.
+6. PB1-A target is 2R. PB1-B target is MAX 2\u20133R. NEVER confuse these.
 7. PB3/PB4 intraday trades ALWAYS include "close at end of session" warning
 8. PB4 swing trades do NOT have the session close rule
 9. ADR direction in PB3: CT Long = ADR exhausted UPSIDE. CT Short = DOWNSIDE.
-10. PB2: QMid does NOT qualify — only recently rejected QLo (uptrend) or QHi (downtrend)
-11. Seasoned trader: D1 QHi in uptrend → routes to PB3 not PB1
+10. PB2: QMid does NOT qualify \u2014 only recently rejected QLo (uptrend) or QHi (downtrend)
+11. Seasoned trader: D1 QHi in uptrend \u2192 routes to PB3 not PB1
 12. IB pending message must include exact time IB confirms for the instrument
+13. NEVER re-calculate conterminous alignment \u2014 use pre-calculated h4_supply_conterminous / h4_demand_conterminous boolean flags as ground truth
+14. ALWAYS reference h4_supply_nearest and h4_demand_nearest for zone levels \u2014 do not estimate or guess H4 levels
 
 RESPONSE FORMAT:
 {
   "playbooks_evaluated": ["PB2","PB1","PB3","PB4"],
   "playbook_selected": "PB2",
-  "playbook_path": "PB2 Uptrend — Open Above VAH",
+  "playbook_path": "PB2 Uptrend \u2014 Open Above VAH",
   "reason_selected": "<why this PB was chosen>",
   "signal": "LONG" or "SHORT" or "NO TRADE",
   "direction": "With Trend" or "Countertrend Intraday" or "Countertrend Swing" or "None",
@@ -540,11 +565,17 @@ RESPONSE FORMAT:
   "target_1r": <number>,
   "target_2r": <number>,
   "target_3r": <number>,
+  "conterminous_used": {
+    "supply_conterminous": <true/false from pre-calc>,
+    "demand_conterminous": <true/false from pre-calc>,
+    "supply_level": <h4_supply_nearest>,
+    "demand_level": <h4_demand_nearest>
+  },
   "criteria": [{"playbook":"PB2","condition":"<text>","met":true/false,"note":"<detail>"}],
   "failed_playbooks": [{"playbook":"PB1","reason":"<why it failed or is pending>"}],
   "reasoning": "<2-3 sentence explanation>",
   "confidence": "High" or "Medium" or "Low",
-  "warnings": ["<any warnings like missing M30 trigger or session gate>"]
+  "warnings": ["<any warnings like missing M30 trigger, session gate, or IB pending>"]
 }`;
 
 app.post('/api/signals', async (req, res) => {
