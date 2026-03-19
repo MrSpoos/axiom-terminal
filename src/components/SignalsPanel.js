@@ -1785,6 +1785,146 @@ function AlertBanner({ alerts, onDismiss, onClearAll }) {
   );
 }
 
+// ── MULTI-INSTRUMENT SCANNER ──────────────────────────────────────────────────
+function InstrumentScanner() {
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastScan, setLastScan] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [scanProgress, setScanProgress] = useState("");
+  const autoRef = useRef(null);
+
+  const scan = useCallback(async () => {
+    setLoading(true); setError(null);
+    setScanProgress("Scanning ES\u2026 NQ\u2026 DAX\u2026 XAU\u2026 OIL\u2026");
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/scanner`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setResults(d.results);
+      setLastScan(new Date());
+    } catch (e) { setError(e.message); }
+    setLoading(false); setScanProgress("");
+  }, []);
+
+  useEffect(() => {
+    if (autoRefresh) {
+      autoRef.current = setInterval(scan, 5 * 60 * 1000);
+      return () => clearInterval(autoRef.current);
+    } else { if (autoRef.current) clearInterval(autoRef.current); }
+  }, [autoRefresh, scan]);
+
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 30000); return () => clearInterval(t); }, []);
+  const timeAgo = lastScan ? (() => {
+    const diff = Math.floor((Date.now() - lastScan.getTime()) / 60000);
+    return diff < 1 ? "just now" : `${diff}m ago`;
+  })() : null;
+
+  const sigColor = (sig) => SIGNAL_COLORS[sig] || "#475569";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={scan} disabled={loading} style={{
+          flex: 1, padding: "10px 0", fontSize: 12, fontWeight: 700,
+          fontFamily: MONO, letterSpacing: "0.12em",
+          background: loading ? "rgba(74,158,255,0.05)" : "rgba(74,158,255,0.15)",
+          border: "1px solid rgba(74,158,255,0.35)", borderRadius: 5,
+          color: "#4a9eff", cursor: loading ? "default" : "pointer",
+        }}>{loading ? "\u23F3 SCANNING..." : "\u26A1 SCAN ALL"}</button>
+        <button onClick={() => setAutoRefresh(!autoRefresh)} style={{
+          padding: "10px 14px", fontSize: 8, fontWeight: 700,
+          fontFamily: MONO, letterSpacing: "0.06em", borderRadius: 5, cursor: "pointer",
+          background: autoRefresh ? "rgba(0,212,170,0.12)" : "rgba(255,255,255,0.04)",
+          border: `1px solid ${autoRefresh ? "rgba(0,212,170,0.3)" : "rgba(255,255,255,0.08)"}`,
+          color: autoRefresh ? "#00d4aa" : "#475569",
+        }}>{autoRefresh ? "\u25CF 5m" : "AUTO"}</button>
+      </div>
+
+      {scanProgress && (
+        <div style={{ fontSize: 8, color: "#475569", fontFamily: MONO, textAlign: "center" }}>{scanProgress}</div>
+      )}
+      {timeAgo && (
+        <div style={{ fontSize: 7, color: "#334155", fontFamily: MONO, textAlign: "center" }}>
+          Last scanned: {timeAgo} {autoRefresh && "\u00b7 auto-refresh ON"}
+        </div>
+      )}
+      {error && (
+        <div style={{ fontSize: 9, fontFamily: MONO, padding: "6px 8px", borderRadius: 4, background: "rgba(255,77,109,0.08)", color: "#ff4d6d" }}>
+          ERROR: {error}
+        </div>
+      )}
+
+      {results && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+          {INSTRUMENTS.map(inst => {
+            const r = results[inst];
+            if (!r) return null;
+            const hasSignal = r.signal === "LONG" || r.signal === "SHORT";
+            const sc = sigColor(r.signal);
+            return (
+              <div key={inst} style={{
+                background: "rgba(0,0,0,0.3)", borderRadius: 6, padding: 10,
+                border: `1px solid ${hasSignal ? sc + "55" : "rgba(255,255,255,0.06)"}`,
+              }}>
+                {r.error ? (
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, fontFamily: MONO, color: "#94a3b8", marginBottom: 4 }}>{inst}</div>
+                    <div style={{ fontSize: 8, fontFamily: MONO, color: "#ff4d6d" }}>{r.error}</div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: MONO, color: "#e2e8f0" }}>{inst}</span>
+                      <span style={{ fontSize: 8, fontFamily: MONO, color: "#64748b" }}>{r.current_price?.toFixed(2)}</span>
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: sc, fontFamily: MONO, marginBottom: 4 }}>
+                      {r.signal || "NO TRADE"}
+                    </div>
+                    {r.playbook_selected && (
+                      <div style={{ fontSize: 8, fontFamily: MONO, color: "#94a3b8", marginBottom: 2 }}>
+                        {PLAYBOOK_NAMES[r.playbook_selected] || r.playbook_selected}
+                      </div>
+                    )}
+                    {r.playbook_path && (
+                      <div style={{ fontSize: 7, fontFamily: MONO, color: "#475569", marginBottom: 4 }}>{r.playbook_path}</div>
+                    )}
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {r.confidence && (
+                        <span style={{ fontSize: 7, fontFamily: MONO, padding: "1px 5px", borderRadius: 3, fontWeight: 700,
+                          color: CONFIDENCE_COLORS[r.confidence] || "#475569",
+                          background: (CONFIDENCE_COLORS[r.confidence] || "#475569") + "15",
+                        }}>{r.confidence}</span>
+                      )}
+                      {r.target_r && r.target_r !== "None" && (
+                        <span style={{ fontSize: 7, fontFamily: MONO, padding: "1px 5px", borderRadius: 3, color: "#00d4aa", background: "rgba(0,212,170,0.1)" }}>{r.target_r}</span>
+                      )}
+                      {r.ib_status && (
+                        <span style={{ fontSize: 7, fontFamily: MONO, padding: "1px 5px", borderRadius: 3,
+                          color: r.ib_status === "set" ? "#00d4aa" : r.ib_status === "forming" ? "#f6c90e" : "#475569",
+                          background: (r.ib_status === "set" ? "#00d4aa" : r.ib_status === "forming" ? "#f6c90e" : "#475569") + "15",
+                        }}>IB {r.ib_status}</span>
+                      )}
+                      {r.adr_exhausted && (
+                        <span style={{ fontSize: 7, fontFamily: MONO, padding: "1px 5px", borderRadius: 3, color: "#f6c90e", background: "rgba(246,201,14,0.1)" }}>ADR EXH</span>
+                      )}
+                    </div>
+                    {r.reasoning && (
+                      <div style={{ fontSize: 7, fontFamily: MONO, color: "#334155", marginTop: 4, lineHeight: 1.4 }}>{r.reasoning}</div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function SignalsPanel() {
   const [mode, setMode] = useState("auto"); // "auto" | "chart" | "ai" | "manual" | "calc"
@@ -1841,7 +1981,7 @@ export default function SignalsPanel() {
 
       {/* Mode toggle */}
       <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
-        {[["auto", "AUTO"], ["chart", "CHART"], ["ai", "ANALYSER"], ["manual", "MANUAL"], ["calc", "ATR"]].map(([k, label]) => (
+        {[["auto", "AUTO"], ["scanner", "SCAN"], ["chart", "CHART"], ["ai", "ANALYSER"], ["manual", "MANUAL"], ["calc", "ATR"]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} style={{
             flex: 1, padding: "5px 0", fontSize: 8, fontWeight: 700,
             fontFamily: MONO, letterSpacing: "0.08em", borderRadius: 3,
@@ -1855,6 +1995,7 @@ export default function SignalsPanel() {
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
         {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} onZonesLoaded={zoneAlerts.setZones} />}
+        {mode === "scanner" && <InstrumentScanner />}
         {mode === "chart" && <ChartAnalyser onAutoFill={handleChartAutoFill} />}
         {mode === "ai" && <AISignalAnalyser chartData={chartData} onZonesLoaded={zoneAlerts.setZones} />}
         {mode === "calc" && <ATRCalculator />}

@@ -1775,6 +1775,57 @@ app.get('/api/adr-asr', async (req, res) => {
   }
 });
 
+// ── /api/scanner — Multi-Instrument Scanner ──────────────────────────────────
+app.get('/api/scanner', async (req, res) => {
+  const instruments = ['ES', 'NQ', 'DAX', 'XAU', 'OIL'];
+  const TIMEOUT_MS = 15000;
+
+  const scanOne = async (sym) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      // Use internal autosignal logic by calling our own endpoint
+      const url = `http://localhost:${PORT}/api/autosignal?symbol=${sym}`;
+      const r = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'AxiomScanner/1.0' } });
+      clearTimeout(timer);
+      const d = await r.json();
+      if (!d.success) return { instrument: sym, error: d.error || 'Failed', signal: null };
+      const s = d.signal || {};
+      const du = d.data_used || {};
+      return {
+        instrument: sym,
+        signal: s.signal || 'NO TRADE',
+        playbook_selected: s.playbook_selected || s.playbook || null,
+        playbook_path: s.playbook_path || null,
+        confidence: s.confidence || null,
+        target_r: s.target_r || null,
+        direction: s.direction || null,
+        ib_status: du.ib_status || null,
+        session_active: s.session_active ?? null,
+        adr_exhausted: du.adr_exhausted || false,
+        vah: du.vah || null,
+        val: du.val || null,
+        current_price: du.current_price || null,
+        stop: s.stop || null,
+        target_1r: s.target_1r || null,
+        reasoning: s.reasoning || null,
+      };
+    } catch (e) {
+      clearTimeout(timer);
+      return { instrument: sym, error: e.name === 'AbortError' ? 'Timeout (15s)' : e.message, signal: null };
+    }
+  };
+
+  try {
+    const results = await Promise.all(instruments.map(scanOne));
+    const byInstrument = {};
+    for (const r of results) byInstrument[r.instrument] = r;
+    res.json({ success: true, results: byInstrument, ts: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -1792,6 +1843,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
   console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
+  console.log(`   /api/scanner     — Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
   console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
   console.log(`   /api/adr-asr     — Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
