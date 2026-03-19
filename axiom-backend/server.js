@@ -1245,7 +1245,17 @@ app.get('/api/autosignal', async (req, res) => {
       ? isConterminous(nearestSupply.price_low, va.val, sym)
       : { conterminous: false, distance: null, tolerance: (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25) };
 
+    // ── ADR/ASR levels ──
+    let asrData = null;
+    try {
+      const asrRes = await fetch(`http://localhost:${PORT}/api/adr-asr?symbol=${sym}`, { headers: { 'User-Agent': 'AxiomAutoSignal/1.0' } });
+      const asrJson = await asrRes.json();
+      if (asrJson.success) asrData = asrJson;
+    } catch (e) { console.warn('ASR fetch failed:', e.message); }
+
     // ── Data object to return + send to AI ──
+    const curSess = asrData?.currentSession || 'NY';
+    const curSessData = asrData?.sessions?.[curSess] || {};
     const dataUsed = {
       vah: va.vah, val: va.val, poc: va.poc,
       atr: atr14, adr: adr20,
@@ -1271,6 +1281,20 @@ app.get('/api/autosignal', async (req, res) => {
       today_range: +todayRange.toFixed(2),
       yesterday_rth_bars: yesterdayRTH.length,
       today_bars: todayBars.length,
+      // ASR data
+      current_session_name: curSess,
+      adr_target_high: asrData?.daily?.targetHigh || null,
+      adr_target_low: asrData?.daily?.targetLow || null,
+      adr_exhaustion_pct: asrData?.daily?.exhaustion?.totalPct || null,
+      asr_current_session: curSess,
+      asr_target_high: curSessData.targetHigh || null,
+      asr_target_low: curSessData.targetLow || null,
+      asr_exhaustion_pct: curSessData.exhaustion?.totalPct || null,
+      asr_sessions: asrData ? {
+        TK: { target_high: asrData.sessions?.TK?.targetHigh, target_low: asrData.sessions?.TK?.targetLow, exhaustion_pct: asrData.sessions?.TK?.exhaustion?.totalPct },
+        LN: { target_high: asrData.sessions?.LN?.targetHigh, target_low: asrData.sessions?.LN?.targetLow, exhaustion_pct: asrData.sessions?.LN?.exhaustion?.totalPct },
+        NY: { target_high: asrData.sessions?.NY?.targetHigh, target_low: asrData.sessions?.NY?.targetLow, exhaustion_pct: asrData.sessions?.NY?.exhaustion?.totalPct },
+      } : null,
     };
 
     // ── Call Claude ──
@@ -1316,8 +1340,17 @@ CURRENT SESSION: ${dataUsed.session}
 CURRENT TIME (ET): ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true })}
 IB STATUS: ${dataUsed.ib_status}
 
+ADR/ASR TARGET LEVELS:
+- ADR Target High: ${dataUsed.adr_target_high || 'N/A'} | ADR Target Low: ${dataUsed.adr_target_low || 'N/A'} | ADR Exhaustion: ${dataUsed.adr_exhaustion_pct ?? 'N/A'}%
+- Current Session: ${dataUsed.asr_current_session}
+- ${dataUsed.asr_current_session} ASR Target High: ${dataUsed.asr_target_high || 'N/A'} | ASR Target Low: ${dataUsed.asr_target_low || 'N/A'} | ASR Exhaustion: ${dataUsed.asr_exhaustion_pct ?? 'N/A'}%
+${dataUsed.asr_sessions ? `- TK ASR: ${dataUsed.asr_sessions.TK?.target_high || 'N/A'} / ${dataUsed.asr_sessions.TK?.target_low || 'N/A'} (${dataUsed.asr_sessions.TK?.exhaustion_pct ?? 'N/A'}%)
+- LN ASR: ${dataUsed.asr_sessions.LN?.target_high || 'N/A'} / ${dataUsed.asr_sessions.LN?.target_low || 'N/A'} (${dataUsed.asr_sessions.LN?.exhaustion_pct ?? 'N/A'}%)
+- NY ASR: ${dataUsed.asr_sessions.NY?.target_high || 'N/A'} / ${dataUsed.asr_sessions.NY?.target_low || 'N/A'} (${dataUsed.asr_sessions.NY?.exhaustion_pct ?? 'N/A'}%)` : ''}
+ASR exhaustion for current session (${dataUsed.asr_current_session}): ${dataUsed.asr_exhaustion_pct ?? 'N/A'}% \u2014 if >100%, session range is exhausted, treat as hard ceiling for profit targets.
+
 IMPORTANT: Check time context. If IB not yet formed, PB2 may still fire (no IB required). PB1 requires IB set.
-Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using ATR.`;
+Calculate stop = entry \u00b1 1x ATR. Calculate 1R/2R/3R targets from entry using ATR.`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1579,9 +1612,9 @@ app.get('/api/h4-zones', async (req, res) => {
 
 // ── BLAHTECH ADR/ASR LEVEL CALCULATIONS ──────────────────────────────────────
 // Equity instrument definitions (CQG symbols from Blahtech Levels)
-const EQUITY_TICK_SIZE = { ES: 0.25, NQ: 0.25, YM: 1, FDXM: 1 };
-const EQUITY_YAHOO_MAP = { ES: 'ES=F', NQ: 'NQ=F', YM: 'YM=F', FDXM: '^GDAXI' };
-const EQUITY_INSTRUMENTS = ['ES', 'NQ', 'YM', 'FDXM'];
+const EQUITY_TICK_SIZE = { ES: 0.25, NQ: 0.25, YM: 1, FDXM: 1, DAX: 0.5, XAU: 0.10, OIL: 0.01 };
+const EQUITY_YAHOO_MAP = { ES: 'ES=F', NQ: 'NQ=F', YM: 'YM=F', FDXM: '^GDAXI', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
+const EQUITY_INSTRUMENTS = ['ES', 'NQ', 'YM', 'FDXM', 'DAX', 'XAU', 'OIL'];
 
 // Session open times in GMT hours
 const SESSION_TIMES = { TK: 0, LN: 7, NY: 13 };

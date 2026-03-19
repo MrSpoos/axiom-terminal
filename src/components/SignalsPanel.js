@@ -676,6 +676,24 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
         </div>
       )}
 
+      {/* ASR levels */}
+      {dataUsed && dataUsed.asr_target_high && (
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
+          {dataUsed.adr_target_high && (
+            <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3,
+              background: (dataUsed.adr_exhaustion_pct || 0) > 100 ? "rgba(255,77,109,0.1)" : (dataUsed.adr_exhaustion_pct || 0) > 80 ? "rgba(246,201,14,0.1)" : "rgba(255,255,255,0.04)",
+              color: (dataUsed.adr_exhaustion_pct || 0) > 100 ? "#ff4d6d" : (dataUsed.adr_exhaustion_pct || 0) > 80 ? "#f6c90e" : "#64748b",
+              border: `1px solid ${(dataUsed.adr_exhaustion_pct || 0) > 100 ? "rgba(255,77,109,0.2)" : (dataUsed.adr_exhaustion_pct || 0) > 80 ? "rgba(246,201,14,0.2)" : "rgba(255,255,255,0.06)"}`,
+            }}>ADR: {dataUsed.adr_target_high}\u2013{dataUsed.adr_target_low} ({dataUsed.adr_exhaustion_pct}%)</span>
+          )}
+          <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3,
+            background: (dataUsed.asr_exhaustion_pct || 0) > 100 ? "rgba(255,77,109,0.1)" : (dataUsed.asr_exhaustion_pct || 0) > 80 ? "rgba(246,201,14,0.1)" : "rgba(255,255,255,0.04)",
+            color: (dataUsed.asr_exhaustion_pct || 0) > 100 ? "#ff4d6d" : (dataUsed.asr_exhaustion_pct || 0) > 80 ? "#f6c90e" : "#64748b",
+            border: `1px solid ${(dataUsed.asr_exhaustion_pct || 0) > 100 ? "rgba(255,77,109,0.2)" : (dataUsed.asr_exhaustion_pct || 0) > 80 ? "rgba(246,201,14,0.2)" : "rgba(255,255,255,0.06)"}`,
+          }}>{dataUsed.asr_current_session} ASR: {dataUsed.asr_target_high}\u2013{dataUsed.asr_target_low} ({dataUsed.asr_exhaustion_pct}%)</span>
+        </div>
+      )}
+
       {/* H4 Supply/Demand zones */}
       {dataUsed && (dataUsed.h4_supply_zones?.length > 0 || dataUsed.h4_demand_zones?.length > 0) && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
