@@ -1033,6 +1033,8 @@ function AISignalAnalyser({ chartData }) {
   const [fetchingATR, setFetchingATR] = useState(false);
   const [qpLoading, setQpLoading] = useState(false);
   const [qpMsg, setQpMsg] = useState(null); // { type: "success"|"warning"|"error", text }
+  const [vaLoading, setVaLoading] = useState(false);
+  const [vaMsg, setVaMsg] = useState(null);
   const [h4SupplyZones, setH4SupplyZones] = useState([]);
   const [h4DemandZones, setH4DemandZones] = useState([]);
   const [zonesLoading, setZonesLoading] = useState(false);
@@ -1059,6 +1061,27 @@ function AISignalAnalyser({ chartData }) {
       }
     } catch (e) { setQpMsg({ type: "error", text: e.message }); }
     setQpLoading(false);
+  }, [form.instrument]);
+
+  const calcVA = useCallback(async () => {
+    setVaLoading(true); setVaMsg(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/tpo?instrument=${form.instrument}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Failed");
+      if (!d.success) throw new Error(d.reason || "No RTH data");
+      const f = d.fields;
+      if (f) {
+        setForm(prev => ({
+          ...prev,
+          vah: String(f.vah),
+          val: String(f.val),
+          vaOpen: f.vaOpen || prev.vaOpen,
+        }));
+      }
+      setVaMsg({ type: "success", text: `VAH ${d.vah} \u00b7 POC ${d.poc} \u00b7 VAL ${d.val} \u00b7 ${d.rthBarsUsed} bars` });
+    } catch (e) { setVaMsg({ type: "error", text: e.message }); }
+    setVaLoading(false);
   }, [form.instrument]);
 
   const YAHOO_MAP = { ES: "ES=F", NQ: "NQ=F", DAX: "^GDAXI", XAU: "GC=F", OIL: "CL=F" };
@@ -1196,7 +1219,22 @@ function AISignalAnalyser({ chartData }) {
       </div>
 
       {/* VA */}
-      <div style={sectionStyle}>VALUE AREA (TPO)</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={sectionStyle}>VALUE AREA (TPO)</div>
+        <button onClick={calcVA} disabled={vaLoading} style={{
+          fontSize: 7, fontFamily: MONO, fontWeight: 700, color: "#4a9eff",
+          background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.2)",
+          borderRadius: 3, padding: "2px 8px", cursor: vaLoading ? "default" : "pointer",
+          letterSpacing: "0.06em",
+        }}>{vaLoading ? "..." : "CALC VA"}</button>
+      </div>
+      {vaMsg && (
+        <div style={{
+          fontSize: 8, fontFamily: MONO, padding: "3px 6px", borderRadius: 3, marginBottom: 2,
+          color: vaMsg.type === "success" ? "#00d4aa" : "#ff4d6d",
+          background: (vaMsg.type === "success" ? "#00d4aa" : "#ff4d6d") + "10",
+        }}>{vaMsg.text}</div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
         <div><div style={labelStyle}>VAH</div><input style={inputStyle} placeholder="VAH" value={form.vah} onChange={e => set("vah", e.target.value)} /></div>
         <div><div style={labelStyle}>VAL</div><input style={inputStyle} placeholder="VAL" value={form.val} onChange={e => set("val", e.target.value)} /></div>

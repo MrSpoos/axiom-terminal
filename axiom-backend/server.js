@@ -1329,6 +1329,94 @@ Calculate stop = entry ± 1x ATR. Calculate 1R/2R/3R targets from entry using AT
   }
 });
 
+// ── /api/tpo — TPO Value Area Calculator (yesterday RTH) ─────────────────────
+app.get('/api/tpo', async (req, res) => {
+  const instrument = (req.query.instrument || 'ES').toUpperCase();
+  const tickerMap = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
+  const ticker = tickerMap[instrument];
+  if (!ticker) return res.status(400).json({ error: `Unknown instrument: ${instrument}` });
+
+  const tick = TICK_SIZE[instrument] || 0.25;
+
+  try {
+    // Fetch 30m bars for last 5 days
+    const chart = await yahooChart(ticker, '30m', '5d');
+    const ts = chart.timestamp || [];
+    const q = chart.indicators?.quote?.[0] || {};
+    const meta = chart.meta || {};
+    const currentPrice = meta.regularMarketPrice || 0;
+
+    const bars30m = [];
+    for (let i = 0; i < ts.length; i++) {
+      if (q.open?.[i] != null && q.high?.[i] != null && q.low?.[i] != null && q.close?.[i] != null) {
+        bars30m.push({ ts: ts[i], open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i] });
+      }
+    }
+
+    // Find yesterday's RTH bars (9:30-16:00 ET)
+    const nowEST = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const todayStr = `${nowEST.getFullYear()}-${String(nowEST.getMonth() + 1).padStart(2, '0')}-${String(nowEST.getDate()).padStart(2, '0')}`;
+
+    const yesterdayRTH = [];
+    for (const bar of bars30m) {
+      const d = new Date(bar.ts * 1000);
+      const est = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const dateStr = `${est.getFullYear()}-${String(est.getMonth() + 1).padStart(2, '0')}-${String(est.getDate()).padStart(2, '0')}`;
+      const hhmm = est.getHours() * 60 + est.getMinutes();
+      // RTH: 9:30 (570min) to 16:00 (960min), exclude today
+      if (dateStr !== todayStr && hhmm >= 570 && hhmm < 960) {
+        yesterdayRTH.push(bar);
+      }
+    }
+
+    // Keep only the most recent RTH day
+    if (yesterdayRTH.length > 0) {
+      const lastDate = new Date(yesterdayRTH[yesterdayRTH.length - 1].ts * 1000)
+        .toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
+      const filtered = yesterdayRTH.filter(b => {
+        const d = new Date(b.ts * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
+        return d === lastDate;
+      });
+      yesterdayRTH.length = 0;
+      yesterdayRTH.push(...filtered);
+    }
+
+    if (yesterdayRTH.length === 0) {
+      return res.json({ success: false, reason: 'No RTH bars found for previous session' });
+    }
+
+    // Calculate TPO Value Area
+    const va = calcTPOValueArea(yesterdayRTH, tick);
+
+    // Determine VA open position
+    let vaOpen = 'Inside VA';
+    if (currentPrice > va.vah) vaOpen = 'Above VAH';
+    else if (currentPrice < va.val) vaOpen = 'Below VAL';
+
+    const r = v => Math.round(v * 100) / 100;
+
+    res.json({
+      success: true,
+      instrument,
+      vah: r(va.vah),
+      val: r(va.val),
+      poc: r(va.poc),
+      vaOpen,
+      currentPrice: r(currentPrice),
+      rthBarsUsed: yesterdayRTH.length,
+      tickSize: tick,
+      fields: {
+        vah: r(va.vah),
+        val: r(va.val),
+        vaOpen,
+      },
+    });
+  } catch (err) {
+    console.error('[TPO]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── /api/qp-calculate — D1 Q Point Calculator (swing-based quartile levels) ──
 app.get('/api/qp-calculate', async (req, res) => {
   const { instrument } = req.query;
@@ -1473,6 +1561,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
   console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
+  console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
   console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
   if (!FRED_KEY) {
     console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
