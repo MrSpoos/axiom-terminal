@@ -556,7 +556,7 @@ function FailedPlaybooks({ items }) {
 }
 
 // ── AUTO SIGNAL ENGINE ───────────────────────────────────────────────────────
-function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
+function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoaded }) {
   const [result, setResult] = useState(null);
   const [dataUsed, setDataUsed] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -572,6 +572,12 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setDataUsed(d.data_used || null);
+      // Register H4 zones for alerts
+      if (onZonesLoaded && d.data_used) {
+        const sup = d.data_used.h4_supply_zones || [];
+        const dem = d.data_used.h4_demand_zones || [];
+        if (sup.length || dem.length) onZonesLoaded(sup, dem, d.data_used.atr || 0, selectedInstrument);
+      }
       if (d.signal) {
         setResult({ ...d.signal, ts: d.ts });
       } else if (d.ai_error) {
@@ -1017,7 +1023,7 @@ function ChartAnalyser({ onAutoFill }) {
 }
 
 // ── AI SIGNAL ANALYSER (manual input) ─────────────────────────────────────────
-function AISignalAnalyser({ chartData }) {
+function AISignalAnalyser({ chartData, onZonesLoaded }) {
   const [form, setForm] = useState({
     instrument: "ES", currentPrice: "", atr: "",
     vah: "", val: "",
@@ -1093,12 +1099,15 @@ function AISignalAnalyser({ chartData }) {
       const r = await fetch(`${BACKEND_URL}/api/h4-zones?symbol=${encodeURIComponent(sym)}&current_price=${cp}&instrument=${form.instrument}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "Failed");
-      setH4SupplyZones(d.supply || []);
-      setH4DemandZones(d.demand || []);
-      const sc = (d.supply || []).length, dc = (d.demand || []).length;
+      const sup = d.supply || [], dem = d.demand || [];
+      setH4SupplyZones(sup);
+      setH4DemandZones(dem);
+      const sc = sup.length, dc = dem.length;
       setZonesMsg(sc || dc
-        ? { type: "success", text: `${sc} supply \u00b7 ${dc} demand zones detected` }
+        ? { type: "success", text: `${sc} supply \u00b7 ${dc} demand zones \u00b7 alerts active` }
         : { type: "warning", text: "No zones detected near current price" });
+      // Register zones for price alerts
+      if (onZonesLoaded && (sc || dc)) onZonesLoaded(sup, dem, d.atr_h4 || 0, form.instrument);
     } catch (e) { setZonesMsg({ type: "error", text: e.message }); }
     setZonesLoading(false);
   }, [form.instrument, form.currentPrice]);
@@ -1643,11 +1652,145 @@ function ManualDecisionTree({ selectedInstrument }) {
   );
 }
 
+// ── PRICE ALERT SYSTEM ───────────────────────────────────────────────────────
+function useZoneAlerts(instrument) {
+  const [watchedZones, setWatchedZones] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [monitoring, setMonitoring] = useState(false);
+  const pollRef = useRef(null);
+  const firedRef = useRef(new Set()); // track which zones already fired
+
+  const YAHOO_MAP = { ES: "ES=F", NQ: "NQ=F", DAX: "^GDAXI", XAU: "GC=F", OIL: "CL=F" };
+
+  const setZones = useCallback((supply, demand, atr, inst) => {
+    const zones = [
+      ...supply.map((z, i) => ({ id: `sup_${i}`, type: "supply", ...z, instrument: inst })),
+      ...demand.map((z, i) => ({ id: `dem_${i}`, type: "demand", ...z, instrument: inst })),
+    ];
+    setWatchedZones(zones);
+    firedRef.current = new Set();
+    setMonitoring(zones.length > 0);
+    // Request notification permission
+    if (zones.length > 0 && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const dismissAlert = useCallback((id) => {
+    setAlerts(a => a.filter(x => x.id !== id));
+  }, []);
+
+  const clearAll = useCallback(() => { setAlerts([]); }, []);
+
+  // Poll price every 30 seconds
+  useEffect(() => {
+    if (!monitoring || watchedZones.length === 0) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+
+    const checkPrice = async () => {
+      try {
+        const inst = watchedZones[0]?.instrument || instrument;
+        const sym = YAHOO_MAP[inst] || "ES=F";
+        const r = await fetch(`${BACKEND_URL}/api/market`);
+        const d = await r.json();
+        if (!d.success) return;
+
+        let price = 0;
+        if (inst === "ES" && d.data?.es) price = d.data.es.price;
+        else if (inst === "NQ" && d.data?.nq) price = d.data.nq.price;
+        else {
+          const etf = (d.data?.etfs || []).find(e => e.sym === inst || e.sym === sym);
+          if (etf) price = etf.price;
+        }
+        if (!price) return;
+
+        // Check each zone
+        for (const zone of watchedZones) {
+          if (firedRef.current.has(zone.id)) continue;
+          const threshold = (zone.distance || 50) * 0.5; // 0.5x of the zone's distance as proximity
+          const zoneMid = (zone.price_high + zone.price_low) / 2;
+          const dist = Math.abs(price - zoneMid);
+          const zoneHalf = (zone.price_high - zone.price_low) / 2;
+          const triggerDist = Math.max(zoneHalf * 2, 5); // within 2x zone width or 5 pts
+
+          if (dist <= triggerDist) {
+            firedRef.current.add(zone.id);
+            const alert = {
+              id: `${zone.id}_${Date.now()}`,
+              zoneId: zone.id,
+              type: zone.type,
+              instrument: zone.instrument,
+              price,
+              zoneHigh: zone.price_high,
+              zoneLow: zone.price_low,
+              ts: new Date(),
+            };
+            setAlerts(a => [alert, ...a]);
+
+            // Browser notification
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification(`Axiom Edge \u2014 ${zone.type.toUpperCase()} Zone Hit`, {
+                body: `${zone.instrument} @ ${price.toFixed(2)} entered ${zone.type} zone ${zone.price_low.toFixed(2)}\u2013${zone.price_high.toFixed(2)}`,
+                icon: "/favicon.ico",
+              });
+            }
+          }
+        }
+      } catch {}
+    };
+
+    checkPrice(); // immediate check
+    pollRef.current = setInterval(checkPrice, 30000);
+    return () => clearInterval(pollRef.current);
+  }, [monitoring, watchedZones, instrument]);
+
+  return { watchedZones, alerts, monitoring, setZones, dismissAlert, clearAll, setMonitoring };
+}
+
+// ── ALERT BANNER ─────────────────────────────────────────────────────────────
+function AlertBanner({ alerts, onDismiss, onClearAll }) {
+  if (alerts.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {alerts.map(a => (
+        <div key={a.id} style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4,
+          background: a.type === "supply" ? "rgba(255,77,109,0.12)" : "rgba(0,212,170,0.12)",
+          border: `1px solid ${a.type === "supply" ? "rgba(255,77,109,0.3)" : "rgba(0,212,170,0.3)"}`,
+          animation: "fadeIn 0.3s ease",
+        }}>
+          <span style={{ fontSize: 12 }}>{a.type === "supply" ? "\uD83D\uDD34" : "\uD83D\uDFE2"}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, fontFamily: MONO, color: a.type === "supply" ? "#ff4d6d" : "#00d4aa" }}>
+              {a.instrument} {a.type.toUpperCase()} ZONE HIT
+            </div>
+            <div style={{ fontSize: 8, fontFamily: MONO, color: "#94a3b8" }}>
+              Price {a.price.toFixed(2)} entered {a.zoneLow.toFixed(2)}\u2013{a.zoneHigh.toFixed(2)} \u00b7 {a.ts.toLocaleTimeString()}
+            </div>
+          </div>
+          <button onClick={() => onDismiss(a.id)} style={{
+            fontSize: 10, color: "#475569", background: "none", border: "none", cursor: "pointer", padding: "0 4px",
+          }}>\u2715</button>
+        </div>
+      ))}
+      {alerts.length > 1 && (
+        <button onClick={onClearAll} style={{
+          fontSize: 7, fontFamily: MONO, color: "#334155", background: "none",
+          border: "none", cursor: "pointer", textAlign: "center", padding: 2,
+        }}>Clear all alerts</button>
+      )}
+    </div>
+  );
+}
+
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function SignalsPanel() {
   const [mode, setMode] = useState("auto"); // "auto" | "chart" | "ai" | "manual" | "calc"
   const [selectedInstrument, setSelectedInstrument] = useState("ES");
   const [chartData, setChartData] = useState(null);
+  const zoneAlerts = useZoneAlerts(selectedInstrument);
 
   const handleChartAutoFill = useCallback((data) => {
     setChartData(data);
@@ -1682,6 +1825,20 @@ export default function SignalsPanel() {
       {/* Session Clock */}
       <SessionClock instrument={selectedInstrument} />
 
+      {/* Zone alerts */}
+      <AlertBanner alerts={zoneAlerts.alerts} onDismiss={zoneAlerts.dismissAlert} onClearAll={zoneAlerts.clearAll} />
+
+      {/* Monitoring indicator */}
+      {zoneAlerts.monitoring && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          <span style={{ fontSize: 7, fontFamily: MONO, color: "#00d4aa" }}>{"\u25CF"} Monitoring {zoneAlerts.watchedZones.length} zones</span>
+          <button onClick={() => zoneAlerts.setMonitoring(false)} style={{
+            fontSize: 7, fontFamily: MONO, color: "#475569", background: "none",
+            border: "1px solid rgba(255,255,255,0.08)", borderRadius: 3, padding: "1px 5px", cursor: "pointer",
+          }}>STOP</button>
+        </div>
+      )}
+
       {/* Mode toggle */}
       <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
         {[["auto", "AUTO"], ["chart", "CHART"], ["ai", "ANALYSER"], ["manual", "MANUAL"], ["calc", "ATR"]].map(([k, label]) => (
@@ -1697,9 +1854,9 @@ export default function SignalsPanel() {
 
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} />}
+        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} onZonesLoaded={zoneAlerts.setZones} />}
         {mode === "chart" && <ChartAnalyser onAutoFill={handleChartAutoFill} />}
-        {mode === "ai" && <AISignalAnalyser chartData={chartData} />}
+        {mode === "ai" && <AISignalAnalyser chartData={chartData} onZonesLoaded={zoneAlerts.setZones} />}
         {mode === "calc" && <ATRCalculator />}
         {mode === "manual" && <ManualDecisionTree selectedInstrument={selectedInstrument} />}
       </div>
