@@ -848,6 +848,59 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
             </div>
           )}
 
+          {/* Day Type Statistics */}
+          {dataUsed?.day_type && (() => {
+            const DT_STATS = [
+              { key: "TRENDING", label: "Trending", pct: 42, color: "#4a9eff", desc: "42% of days \u00b7 With-trend setups dominate \u00b7 PB1/PB2 primary" },
+              { key: "NORMAL_VARIATION", label: "Normal", pct: 28, color: "#00d4aa", desc: "28% of days \u00b7 Standard day \u00b7 All playbooks evaluable" },
+              { key: "LIMITED_AUCTION", label: "Limited", pct: 18, color: "#475569", desc: "18% of days \u00b7 Range-bound \u00b7 Reduced opportunity \u00b7 PB3 only if ADR permits" },
+              { key: "ASYMMETRICAL_NEUTRAL", label: "Asym. Neutral", pct: 12, color: "#f6c90e", desc: "12% of days \u00b7 Failed auction day \u00b7 Lean PB3/PB4 countertrend" },
+            ];
+            const current = DT_STATS.find(d => d.key === dataUsed.day_type);
+            const confColor = dataUsed.day_type_confidence === "HIGH" ? "#00d4aa" : dataUsed.day_type_confidence === "MEDIUM" ? "#f6c90e" : "#475569";
+            return (
+              <div style={{ marginBottom: 8, background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+                  <span style={{ fontSize: 8, color: "#334155", fontFamily: MONO, letterSpacing: "0.1em" }}>DAY TYPE DISTRIBUTION</span>
+                  {dataUsed.day_type_confidence && (
+                    <span style={{ fontSize: 6, fontFamily: MONO, fontWeight: 700, padding: "1px 4px", borderRadius: 2,
+                      color: confColor, background: confColor + "18" }}>{dataUsed.day_type_confidence}</span>
+                  )}
+                </div>
+                {/* Horizontal bar chart */}
+                <div style={{ display: "flex", height: 18, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
+                  {DT_STATS.map(d => (
+                    <div key={d.key} style={{
+                      width: `${d.pct}%`, display: "flex", alignItems: "center", justifyContent: "center",
+                      background: d.color + (dataUsed.day_type === d.key ? "35" : "15"),
+                      borderTop: dataUsed.day_type === d.key ? `2px solid ${d.color}` : "2px solid transparent",
+                      borderBottom: dataUsed.day_type === d.key ? `2px solid ${d.color}` : "2px solid transparent",
+                      transition: "all 0.2s",
+                    }}>
+                      <span style={{ fontSize: 6, fontFamily: MONO, color: dataUsed.day_type === d.key ? d.color : "#334155",
+                        fontWeight: dataUsed.day_type === d.key ? 700 : 400 }}>{d.pct}%</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Labels */}
+                <div style={{ display: "flex", marginBottom: 5 }}>
+                  {DT_STATS.map(d => (
+                    <div key={d.key} style={{ width: `${d.pct}%`, textAlign: "center" }}>
+                      <span style={{ fontSize: 5, fontFamily: MONO, color: dataUsed.day_type === d.key ? d.color : "#1e293b",
+                        fontWeight: dataUsed.day_type === d.key ? 700 : 400 }}>{d.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Implication */}
+                {current ? (
+                  <div style={{ fontSize: 7, fontFamily: MONO, color: "#64748b", lineHeight: 1.4 }}>{current.desc}</div>
+                ) : dataUsed.day_type === "UNKNOWN" ? (
+                  <div style={{ fontSize: 7, fontFamily: MONO, color: "#334155" }}>IB not yet set \u00b7 Day type pending</div>
+                ) : null}
+              </div>
+            );
+          })()}
+
           {/* Criteria checklist */}
           {result.criteria && result.criteria.length > 0 && (
             <div style={{ marginBottom: 10, background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: 8 }}>
