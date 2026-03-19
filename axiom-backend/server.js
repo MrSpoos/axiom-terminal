@@ -925,67 +925,177 @@ function isConterminous(h4Level, vaLevel, instrument) {
 }
 
 // ── H4 SWING ZONE DETECTION (GAP 2) ─────────────────────────────────────────
-function detectSwingZones(bars, atr) {
+function classifyFormation(bars, idx, type) {
+  // type = 'supply' or 'demand'
+  // Look at 3 bars before and 3 bars after the swing point
+  if (idx < 3 || idx >= bars.length - 3) return { formation: 'unknown', formation_strength: 'unknown' };
+  const before = bars.slice(idx - 3, idx);
+  const after = bars.slice(idx + 1, idx + 4);
+  const rising = (b) => b[b.length - 1].close > b[0].open;
+  const falling = (b) => b[b.length - 1].close < b[0].open;
+
+  if (type === 'supply') {
+    // RBD: rising before, drop after → reversal (strong)
+    if (rising(before) && falling(after)) return { formation: 'RBD', formation_strength: 'reversal' };
+    // RBR: rising before, rising after → continuation (weak)
+    if (rising(before) && rising(after)) return { formation: 'RBR', formation_strength: 'continuation' };
+  } else {
+    // DBR: falling before, rally after → reversal (strong)
+    if (falling(before) && rising(after)) return { formation: 'DBR', formation_strength: 'reversal' };
+    // DBD: falling before, falling after → continuation (weak)
+    if (falling(before) && falling(after)) return { formation: 'DBD', formation_strength: 'continuation' };
+  }
+  return { formation: 'unknown', formation_strength: 'unknown' };
+}
+
+function detectSwingZones(bars, atr, ibHigh, ibLow) {
   // bars = [{open, high, low, close}] — H4 bars (RTH only)
-  const LB = 3; // lookback: 3 bars each side for confirmed swing
+  const LB = 3;
   if (!bars || bars.length < LB * 2 + 1) return { supply: [], demand: [] };
 
-  // Filter outlier bars: reject bars with range > 3x ATR (extended hours spikes)
   const maxRange = atr > 0 ? atr * 3 : Infinity;
   const clean = bars.filter(b => (b.high - b.low) <= maxRange);
   if (clean.length < LB * 2 + 1) return { supply: [], demand: [] };
 
+  const totalBars = clean.length;
   const supply = [], demand = [];
+
   for (let i = LB; i < clean.length - LB; i++) {
-    // Swing High (supply): high > LB bars before AND LB bars after
     let isHigh = true, isLow = true;
     for (let j = 1; j <= LB; j++) {
       if (clean[i].high <= clean[i - j].high || clean[i].high <= clean[i + j].high) isHigh = false;
       if (clean[i].low >= clean[i - j].low || clean[i].low >= clean[i + j].low) isLow = false;
     }
+
     if (isHigh) {
       const body = clean[i].open > clean[i].close ? clean[i].close : clean[i].open;
-      supply.push({ price_high: +clean[i].high.toFixed(2), price_low: +body.toFixed(2) });
+      const { formation, formation_strength } = classifyFormation(clean, i, 'supply');
+      // Departure speed: bar after the swing
+      const depBar = clean[i + 1];
+      const depRange = depBar ? depBar.high - depBar.low : 0;
+      const departure_pct = atr > 0 ? +(depRange / atr).toFixed(2) : 0;
+      const departure_speed = departure_pct > 1.5 ? 'explosive' : departure_pct >= 0.8 ? 'normal' : 'slow';
+      // Freshness
+      const bars_ago = totalBars - 1 - i;
+      const freshness = bars_ago < 20 ? 'fresh' : bars_ago <= 60 ? 'recent' : 'aged';
+      // Times tested: count returns to within 0.5 ATR after formation
+      let times_tested = 0;
+      const zoneLevel = clean[i].high;
+      const testThreshold = atr > 0 ? atr * 0.5 : 5;
+      for (let k = i + LB + 1; k < clean.length; k++) {
+        if (Math.abs(clean[k].high - zoneLevel) < testThreshold || Math.abs(clean[k].low - zoneLevel) < testThreshold) { times_tested++; }
+      }
+      // Quality score
+      let score = 0;
+      score += formation_strength === 'reversal' ? 4 : formation_strength === 'continuation' ? 1 : 2;
+      score += departure_speed === 'explosive' ? 3 : departure_speed === 'normal' ? 2 : 1;
+      score += freshness === 'fresh' ? 2 : freshness === 'recent' ? 1 : 0;
+      score += times_tested === 0 ? 1 : times_tested >= 2 ? -1 : 0;
+      score = Math.max(0, Math.min(10, score));
+      // SIIB/WIIB
+      let siib_wiib = null;
+      if (ibHigh && ibLow && zoneLevel >= ibLow && zoneLevel <= ibHigh) {
+        siib_wiib = score >= 6 ? 'SIIB' : 'WIIB';
+      }
+      supply.push({
+        price_high: +clean[i].high.toFixed(2), price_low: +body.toFixed(2),
+        formation, formation_strength, departure_speed, departure_pct,
+        freshness, bars_ago, times_tested, quality_score: score,
+        tradeable: score >= 5, siib_wiib, merge_count: 1, idx: i,
+      });
     }
+
     if (isLow) {
       const body = clean[i].open > clean[i].close ? clean[i].open : clean[i].close;
-      demand.push({ price_high: +body.toFixed(2), price_low: +clean[i].low.toFixed(2) });
+      const { formation, formation_strength } = classifyFormation(clean, i, 'demand');
+      const depBar = clean[i + 1];
+      const depRange = depBar ? depBar.high - depBar.low : 0;
+      const departure_pct = atr > 0 ? +(depRange / atr).toFixed(2) : 0;
+      const departure_speed = departure_pct > 1.5 ? 'explosive' : departure_pct >= 0.8 ? 'normal' : 'slow';
+      const bars_ago = totalBars - 1 - i;
+      const freshness = bars_ago < 20 ? 'fresh' : bars_ago <= 60 ? 'recent' : 'aged';
+      let times_tested = 0;
+      const zoneLevel = clean[i].low;
+      const testThreshold = atr > 0 ? atr * 0.5 : 5;
+      for (let k = i + LB + 1; k < clean.length; k++) {
+        if (Math.abs(clean[k].low - zoneLevel) < testThreshold || Math.abs(clean[k].high - zoneLevel) < testThreshold) { times_tested++; }
+      }
+      let score = 0;
+      score += formation_strength === 'reversal' ? 4 : formation_strength === 'continuation' ? 1 : 2;
+      score += departure_speed === 'explosive' ? 3 : departure_speed === 'normal' ? 2 : 1;
+      score += freshness === 'fresh' ? 2 : freshness === 'recent' ? 1 : 0;
+      score += times_tested === 0 ? 1 : times_tested >= 2 ? -1 : 0;
+      score = Math.max(0, Math.min(10, score));
+      let siib_wiib = null;
+      if (ibHigh && ibLow && zoneLevel >= ibLow && zoneLevel <= ibHigh) {
+        siib_wiib = score >= 6 ? 'SIIB' : 'WIIB';
+      }
+      demand.push({
+        price_high: +body.toFixed(2), price_low: +clean[i].low.toFixed(2),
+        formation, formation_strength, departure_speed, departure_pct,
+        freshness, bars_ago, times_tested, quality_score: score,
+        tradeable: score >= 5, siib_wiib, merge_count: 1, idx: i,
+      });
     }
   }
-  // Cluster nearby zones (within 0.5 ATR)
+
+  // Cluster nearby zones (within 0.5 ATR) — keep best quality score
   const cluster = (zones, key) => {
     if (zones.length === 0) return zones;
     const threshold = atr > 0 ? atr * 0.5 : 999999;
     const sorted = [...zones].sort((a, b) => a[key] - b[key]);
-    const clustered = [sorted[0]];
+    const clustered = [{ ...sorted[0] }];
     for (let i = 1; i < sorted.length; i++) {
       const prev = clustered[clustered.length - 1];
       if (Math.abs(sorted[i][key] - prev[key]) < threshold) {
-        // Merge: expand the zone
         prev.price_high = Math.max(prev.price_high, sorted[i].price_high);
         prev.price_low = Math.min(prev.price_low, sorted[i].price_low);
-        prev.strength = (prev.strength || 1) + 1;
+        prev.merge_count = (prev.merge_count || 1) + 1;
+        // Keep the higher quality score
+        if (sorted[i].quality_score > prev.quality_score) {
+          prev.formation = sorted[i].formation;
+          prev.formation_strength = sorted[i].formation_strength;
+          prev.departure_speed = sorted[i].departure_speed;
+          prev.departure_pct = sorted[i].departure_pct;
+          prev.quality_score = sorted[i].quality_score;
+          prev.siib_wiib = sorted[i].siib_wiib;
+        }
+        // Freshness: keep the freshest
+        if (sorted[i].bars_ago < prev.bars_ago) {
+          prev.bars_ago = sorted[i].bars_ago;
+          prev.freshness = sorted[i].freshness;
+        }
+        prev.times_tested = Math.min(prev.times_tested, sorted[i].times_tested);
       } else {
-        clustered.push({ ...sorted[i], strength: 1 });
+        clustered.push({ ...sorted[i] });
       }
     }
-    return clustered;
+    // Merge count bonus
+    return clustered.map(z => {
+      let bonus = z.merge_count >= 3 ? 1 : z.merge_count >= 2 ? 0.5 : 0;
+      z.quality_score = Math.min(10, +(z.quality_score + bonus).toFixed(1));
+      z.tradeable = z.quality_score >= 5;
+      delete z.idx;
+      return z;
+    });
   };
+
   return {
-    supply: cluster(supply, 'price_high').map(z => ({ ...z, strength: z.strength || 1 })),
-    demand: cluster(demand, 'price_low').map(z => ({ ...z, strength: z.strength || 1 })),
+    supply: cluster(supply, 'price_high'),
+    demand: cluster(demand, 'price_low'),
   };
 }
 
 function getNearestZones(zones, currentPrice, count) {
+  // Tradeable zones first (score >= 5), sorted by quality then distance
   const above = zones.supply
     .filter(z => z.price_low > currentPrice)
-    .sort((a, b) => a.price_low - b.price_low)
+    .sort((a, b) => b.quality_score - a.quality_score || a.price_low - b.price_low)
     .slice(0, count)
     .map(z => ({ ...z, distance: +(z.price_low - currentPrice).toFixed(2) }));
   const below = zones.demand
     .filter(z => z.price_high < currentPrice)
-    .sort((a, b) => b.price_high - a.price_high)
+    .sort((a, b) => b.quality_score - a.quality_score || b.price_high - a.price_high)
     .slice(0, count)
     .map(z => ({ ...z, distance: +(currentPrice - z.price_high).toFixed(2) }));
   return { supply: above, demand: below };
@@ -1321,7 +1431,7 @@ app.get('/api/autosignal', async (req, res) => {
     try {
       const h4Bars = await fetchH4Bars(yahooSym);
       const h4atr = calcATR(h4Bars, 14);
-      const rawZones = detectSwingZones(h4Bars, h4atr);
+      const rawZones = detectSwingZones(h4Bars, h4atr, ibHigh, ibLow);
       h4Zones = getNearestZones(rawZones, currentPrice, 3);
     } catch (e) { console.warn('H4 zones failed:', e.message); }
 
@@ -1331,12 +1441,16 @@ app.get('/api/autosignal', async (req, res) => {
     // ── Conterminous checks (GAP 3) ──
     const nearestDemand = h4Zones.demand[0];
     const nearestSupply = h4Zones.supply[0];
-    const demandConterminous = nearestDemand
+    const defaultTol = (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25);
+    let demandConterminous = nearestDemand
       ? isConterminous(nearestDemand.price_high, va.vah, sym)
-      : { conterminous: false, distance: null, tolerance: (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25) };
-    const supplyConterminous = nearestSupply
+      : { conterminous: false, distance: null, tolerance: defaultTol };
+    let supplyConterminous = nearestSupply
       ? isConterminous(nearestSupply.price_low, va.val, sym)
-      : { conterminous: false, distance: null, tolerance: (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25) };
+      : { conterminous: false, distance: null, tolerance: defaultTol };
+    // Reject weak zones as c-lines (quality < 5 = not tradeable)
+    if (nearestDemand && !nearestDemand.tradeable) demandConterminous = { ...demandConterminous, conterminous: false };
+    if (nearestSupply && !nearestSupply.tradeable) supplyConterminous = { ...supplyConterminous, conterminous: false };
 
     // ── ADR/ASR levels ──
     let asrData = null;
@@ -1420,8 +1534,8 @@ QUARTERLY PIVOTS:
 - H4: QP: ${dataUsed.h4_qp} | QHi: ${dataUsed.h4_qhi} | QMid: ${dataUsed.h4_qmid} | QLo: ${dataUsed.h4_qlo}
 
 H4 SUPPLY/DEMAND ZONES (auto-detected from swing highs/lows):
-- Nearest Supply (above): ${dataUsed.h4_supply_nearest ? `${dataUsed.h4_supply_nearest.price_low}-${dataUsed.h4_supply_nearest.price_high} (distance: ${dataUsed.h4_supply_nearest.distance})` : 'None detected'}
-- Nearest Demand (below): ${dataUsed.h4_demand_nearest ? `${dataUsed.h4_demand_nearest.price_high}-${dataUsed.h4_demand_nearest.price_low} (distance: ${dataUsed.h4_demand_nearest.distance})` : 'None detected'}
+- Nearest Supply (above): ${dataUsed.h4_supply_nearest ? `${dataUsed.h4_supply_nearest.price_low}-${dataUsed.h4_supply_nearest.price_high} (distance: ${dataUsed.h4_supply_nearest.distance}, ${dataUsed.h4_supply_nearest.formation || 'unknown'} formation, ${dataUsed.h4_supply_nearest.departure_speed || 'unknown'} departure, score ${dataUsed.h4_supply_nearest.quality_score}/10, ${dataUsed.h4_supply_nearest.tradeable ? 'TRADEABLE' : 'WEAK'}, ${dataUsed.h4_supply_nearest.siib_wiib || 'outside IB'})` : 'None detected'}
+- Nearest Demand (below): ${dataUsed.h4_demand_nearest ? `${dataUsed.h4_demand_nearest.price_high}-${dataUsed.h4_demand_nearest.price_low} (distance: ${dataUsed.h4_demand_nearest.distance}, ${dataUsed.h4_demand_nearest.formation || 'unknown'} formation, ${dataUsed.h4_demand_nearest.departure_speed || 'unknown'} departure, score ${dataUsed.h4_demand_nearest.quality_score}/10, ${dataUsed.h4_demand_nearest.tradeable ? 'TRADEABLE' : 'WEAK'}, ${dataUsed.h4_demand_nearest.siib_wiib || 'outside IB'})` : 'None detected'}
 - All Supply: ${dataUsed.h4_supply_zones.map(z => `${z.price_low}-${z.price_high}`).join(' | ') || 'None'}
 - All Demand: ${dataUsed.h4_demand_zones.map(z => `${z.price_low}-${z.price_high}`).join(' | ') || 'None'}
 
@@ -1704,7 +1818,7 @@ app.get('/api/h4-zones', async (req, res) => {
   try {
     const h4Bars = await fetchH4Bars(symbol);
     const atr = calcATR(h4Bars, 14);
-    const rawZones = detectSwingZones(h4Bars, atr);
+    const rawZones = detectSwingZones(h4Bars, atr, null, null);
     const nearest = getNearestZones(rawZones, currentPrice, 3);
     res.json({ success: true, supply: nearest.supply, demand: nearest.demand, h4_bars_count: h4Bars.length, atr_h4: +atr.toFixed(2) });
   } catch (err) {

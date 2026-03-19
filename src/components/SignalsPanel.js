@@ -698,19 +698,39 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
 
       {/* H4 Supply/Demand zones */}
       {dataUsed && (dataUsed.h4_supply_zones?.length > 0 || dataUsed.h4_demand_zones?.length > 0) && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-          {(dataUsed.h4_supply_zones || []).map((z, i) => (
-            <span key={`s${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
-              background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.15)", color: "#ff4d6d" }}>
-              Supply: {z.price_low}–{z.price_high}
-            </span>
-          ))}
-          {(dataUsed.h4_demand_zones || []).map((z, i) => (
-            <span key={`d${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
-              background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.15)", color: "#00d4aa" }}>
-              Demand: {z.price_low}–{z.price_high}
-            </span>
-          ))}
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
+          {(dataUsed.h4_supply_zones || []).map((z, i) => {
+            const bright = (z.quality_score || 0) >= 7;
+            const muted = (z.quality_score || 0) < 5;
+            return (
+              <span key={`s${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                background: muted ? "rgba(255,255,255,0.03)" : "rgba(255,77,109,0.08)",
+                border: `1px solid ${muted ? "rgba(255,255,255,0.06)" : bright ? "rgba(255,77,109,0.3)" : "rgba(255,77,109,0.15)"}`,
+                color: muted ? "#475569" : bright ? "#ff4d6d" : "#94616b",
+              }}>S: {z.price_low}\u2013{z.price_high} {z.quality_score != null ? `\u2605${z.quality_score}` : ""} {z.formation && z.formation !== "unknown" ? z.formation : ""}
+              {z.siib_wiib && <span style={{ fontSize: 6, fontWeight: 700, padding: "0 3px", borderRadius: 2, marginLeft: 1,
+                background: z.siib_wiib === "SIIB" ? "rgba(0,212,170,0.15)" : "rgba(255,255,255,0.05)",
+                color: z.siib_wiib === "SIIB" ? "#00d4aa" : "#475569",
+              }}>{z.siib_wiib}</span>}
+              </span>
+            );
+          })}
+          {(dataUsed.h4_demand_zones || []).map((z, i) => {
+            const bright = (z.quality_score || 0) >= 7;
+            const muted = (z.quality_score || 0) < 5;
+            return (
+              <span key={`d${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                background: muted ? "rgba(255,255,255,0.03)" : "rgba(0,212,170,0.08)",
+                border: `1px solid ${muted ? "rgba(255,255,255,0.06)" : bright ? "rgba(0,212,170,0.3)" : "rgba(0,212,170,0.15)"}`,
+                color: muted ? "#475569" : bright ? "#00d4aa" : "#6b9488",
+              }}>D: {z.price_low}\u2013{z.price_high} {z.quality_score != null ? `\u2605${z.quality_score}` : ""} {z.formation && z.formation !== "unknown" ? z.formation : ""}
+              {z.siib_wiib && <span style={{ fontSize: 6, fontWeight: 700, padding: "0 3px", borderRadius: 2, marginLeft: 1,
+                background: z.siib_wiib === "SIIB" ? "rgba(0,212,170,0.15)" : "rgba(255,255,255,0.05)",
+                color: z.siib_wiib === "SIIB" ? "#00d4aa" : "#475569",
+              }}>{z.siib_wiib}</span>}
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -1372,14 +1392,22 @@ function AISignalAnalyser({ chartData, onZonesLoaded }) {
       {(h4SupplyZones.length > 0 || h4DemandZones.length > 0) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
           {h4SupplyZones.map((z, i) => (
-            <span key={`s${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
-              background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.15)", color: "#ff4d6d",
-            }}>Supply: {z.price_low}\u2013{z.price_high}</span>
+            <span key={`s${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+              background: (z.quality_score || 0) < 5 ? "rgba(255,255,255,0.03)" : "rgba(255,77,109,0.08)",
+              border: `1px solid ${(z.quality_score || 0) >= 7 ? "rgba(255,77,109,0.3)" : (z.quality_score || 0) < 5 ? "rgba(255,255,255,0.06)" : "rgba(255,77,109,0.15)"}`,
+              color: (z.quality_score || 0) < 5 ? "#475569" : "#ff4d6d",
+            }}>S: {z.price_low}\u2013{z.price_high} {z.quality_score != null ? `\u2605${z.quality_score}` : ""} {z.formation && z.formation !== "unknown" ? z.formation : ""}
+            {z.siib_wiib && <span style={{ fontSize: 6, fontWeight: 700, padding: "0 3px", borderRadius: 2, background: z.siib_wiib === "SIIB" ? "rgba(0,212,170,0.15)" : "rgba(255,255,255,0.05)", color: z.siib_wiib === "SIIB" ? "#00d4aa" : "#475569" }}>{z.siib_wiib}</span>}
+            </span>
           ))}
           {h4DemandZones.map((z, i) => (
-            <span key={`d${i}`} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
-              background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.15)", color: "#00d4aa",
-            }}>Demand: {z.price_low}\u2013{z.price_high}</span>
+            <span key={`d${i}`} style={{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+              background: (z.quality_score || 0) < 5 ? "rgba(255,255,255,0.03)" : "rgba(0,212,170,0.08)",
+              border: `1px solid ${(z.quality_score || 0) >= 7 ? "rgba(0,212,170,0.3)" : (z.quality_score || 0) < 5 ? "rgba(255,255,255,0.06)" : "rgba(0,212,170,0.15)"}`,
+              color: (z.quality_score || 0) < 5 ? "#475569" : "#00d4aa",
+            }}>D: {z.price_low}\u2013{z.price_high} {z.quality_score != null ? `\u2605${z.quality_score}` : ""} {z.formation && z.formation !== "unknown" ? z.formation : ""}
+            {z.siib_wiib && <span style={{ fontSize: 6, fontWeight: 700, padding: "0 3px", borderRadius: 2, background: z.siib_wiib === "SIIB" ? "rgba(0,212,170,0.15)" : "rgba(255,255,255,0.05)", color: z.siib_wiib === "SIIB" ? "#00d4aa" : "#475569" }}>{z.siib_wiib}</span>}
+            </span>
           ))}
         </div>
       )}
