@@ -893,19 +893,30 @@ function isConterminous(h4Level, vaLevel, instrument) {
 
 // ── H4 SWING ZONE DETECTION (GAP 2) ─────────────────────────────────────────
 function detectSwingZones(bars, atr) {
-  // bars = [{open, high, low, close}] — ideally H4 bars
-  if (!bars || bars.length < 5) return { supply: [], demand: [] };
+  // bars = [{open, high, low, close}] — H4 bars (RTH only)
+  const LB = 3; // lookback: 3 bars each side for confirmed swing
+  if (!bars || bars.length < LB * 2 + 1) return { supply: [], demand: [] };
+
+  // Filter outlier bars: reject bars with range > 3x ATR (extended hours spikes)
+  const maxRange = atr > 0 ? atr * 3 : Infinity;
+  const clean = bars.filter(b => (b.high - b.low) <= maxRange);
+  if (clean.length < LB * 2 + 1) return { supply: [], demand: [] };
+
   const supply = [], demand = [];
-  for (let i = 2; i < bars.length - 2; i++) {
-    // Swing High (supply): high > 2 bars before AND 2 bars after
-    if (bars[i].high > bars[i-1].high && bars[i].high > bars[i-2].high &&
-        bars[i].high > bars[i+1].high && bars[i].high > bars[i+2].high) {
-      supply.push({ price_high: +bars[i].high.toFixed(2), price_low: +bars[i].open > bars[i].close ? +bars[i].close.toFixed(2) : +bars[i].open.toFixed(2) });
+  for (let i = LB; i < clean.length - LB; i++) {
+    // Swing High (supply): high > LB bars before AND LB bars after
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= LB; j++) {
+      if (clean[i].high <= clean[i - j].high || clean[i].high <= clean[i + j].high) isHigh = false;
+      if (clean[i].low >= clean[i - j].low || clean[i].low >= clean[i + j].low) isLow = false;
     }
-    // Swing Low (demand): low < 2 bars before AND 2 bars after
-    if (bars[i].low < bars[i-1].low && bars[i].low < bars[i-2].low &&
-        bars[i].low < bars[i+1].low && bars[i].low < bars[i+2].low) {
-      demand.push({ price_high: +bars[i].open > bars[i].close ? +bars[i].open.toFixed(2) : +bars[i].close.toFixed(2), price_low: +bars[i].low.toFixed(2) });
+    if (isHigh) {
+      const body = clean[i].open > clean[i].close ? clean[i].close : clean[i].open;
+      supply.push({ price_high: +clean[i].high.toFixed(2), price_low: +body.toFixed(2) });
+    }
+    if (isLow) {
+      const body = clean[i].open > clean[i].close ? clean[i].open : clean[i].close;
+      demand.push({ price_high: +body.toFixed(2), price_low: +clean[i].low.toFixed(2) });
     }
   }
   // Cluster nearby zones (within 0.5 ATR)
@@ -948,8 +959,15 @@ function getNearestZones(zones, currentPrice, count) {
 }
 
 async function fetchH4Bars(yahooSymbol) {
-  // Fetch 1h bars for 30 days, then group into 4h bars
-  const chart = await yahooChart(yahooSymbol, '1h', '30d');
+  // Fetch 1h RTH-only bars (no pre/post market spikes), then group into 4h
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1h&range=30d&includePrePost=false`;
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  if (!r.ok) throw new Error(`Yahoo H4 ${yahooSymbol} HTTP ${r.status}`);
+  const d = await r.json();
+  const chart = d?.chart?.result?.[0];
+  if (!chart) throw new Error(`No H4 chart data for ${yahooSymbol}`);
   const ts = chart.timestamp || [];
   const q = chart.indicators?.quote?.[0] || {};
   const hourBars = [];
