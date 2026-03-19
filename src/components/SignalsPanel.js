@@ -1479,6 +1479,11 @@ function AISignalAnalyser({ chartData }) {
 function ManualDecisionTree({ selectedInstrument }) {
   const [currentId, setCurrentId] = useState("start");
   const [history, setHistory] = useState([]);
+  // Lightweight VA/H4 levels for live conterminous badges
+  const [mtVah, setMtVah] = useState("");
+  const [mtVal, setMtVal] = useState("");
+  const [mtH4Dem, setMtH4Dem] = useState("");
+  const [mtH4Sup, setMtH4Sup] = useState("");
 
   const node = TREE[currentId];
   const isSignal = node.step === 6;
@@ -1529,11 +1534,58 @@ function ManualDecisionTree({ selectedInstrument }) {
         })}
       </div>
 
+      {/* Conterminous level inputs — compact bar, always visible */}
+      <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 7, color: "#334155", fontFamily: MONO }}>LEVELS:</span>
+        {[["VAH", mtVah, setMtVah], ["VAL", mtVal, setMtVal], ["H4 Dem", mtH4Dem, setMtH4Dem], ["H4 Sup", mtH4Sup, setMtH4Sup]].map(([lbl, val, setter]) => (
+          <input key={lbl} placeholder={lbl} value={val} onChange={e => setter(e.target.value)} style={{
+            width: 58, fontSize: 8, fontFamily: MONO, padding: "2px 4px", borderRadius: 3,
+            background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.08)",
+            color: "#94a3b8", outline: "none",
+          }} />
+        ))}
+      </div>
+
       {/* Question or Signal */}
       {!isSignal ? (
         <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(74,158,255,0.15)", borderRadius: 6, padding: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#e2e8f0", fontFamily: MONO, marginBottom: 6 }}>{node.question}</div>
-          <div style={{ fontSize: 9, color: "#64748b", fontFamily: MONO, lineHeight: 1.5, marginBottom: 12 }}>{node.context}</div>
+          <div style={{ fontSize: 9, color: "#64748b", fontFamily: MONO, lineHeight: 1.5, marginBottom: node.context.includes("Conterminous") ? 6 : 12 }}>{node.context}</div>
+          {/* Live conterminous badges — only on steps that reference it */}
+          {node.context.includes("Conterminous") && (() => {
+            const TV = { ES: 0.25, NQ: 0.25, DAX: 1.0, XAU: 0.1, OIL: 0.01 };
+            const tv = TV[selectedInstrument] || 0.25;
+            const tol = 10 * tv;
+            const vah = parseFloat(mtVah), val = parseFloat(mtVal);
+            const h4d = parseFloat(mtH4Dem), h4s = parseFloat(mtH4Sup);
+            const hasDem = !isNaN(vah) && !isNaN(h4d);
+            const hasSup = !isNaN(val) && !isNaN(h4s);
+            const demDist = hasDem ? Math.abs(h4d - vah) : null;
+            const supDist = hasSup ? Math.abs(h4s - val) : null;
+            if (!hasDem && !hasSup) return (
+              <div style={{ fontSize: 7, color: "#334155", fontFamily: MONO, marginBottom: 8 }}>
+                Enter VAH/VAL + H4 levels above to see live conterminous check
+              </div>
+            );
+            return (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                {hasDem && (
+                  <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                    background: demDist <= tol ? "rgba(0,212,170,0.1)" : "rgba(255,77,109,0.08)",
+                    color: demDist <= tol ? "#00d4aa" : "#ff4d6d",
+                    border: `1px solid ${demDist <= tol ? "rgba(0,212,170,0.2)" : "rgba(255,77,109,0.15)"}`,
+                  }}>{demDist <= tol ? "\u2713" : "\u2717"} Dem\u2194VAH: {demDist.toFixed(2)}pt (tol: {tol})</span>
+                )}
+                {hasSup && (
+                  <span style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3,
+                    background: supDist <= tol ? "rgba(0,212,170,0.1)" : "rgba(255,77,109,0.08)",
+                    color: supDist <= tol ? "#00d4aa" : "#ff4d6d",
+                    border: `1px solid ${supDist <= tol ? "rgba(0,212,170,0.2)" : "rgba(255,77,109,0.15)"}`,
+                  }}>{supDist <= tol ? "\u2713" : "\u2717"} Sup\u2194VAL: {supDist.toFixed(2)}pt (tol: {tol})</span>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {node.options.map((opt) => (
               <button key={opt.value} onClick={() => handleAnswer(opt)} style={{
