@@ -1048,6 +1048,96 @@ function detectM30Pattern(bars, atr) {
   return 'None';
 }
 
+// ── DAY TYPE CLASSIFICATION ───────────────────────────────────────────────────
+function classifyDayType(todayBars, vah, val, ibHigh, ibLow, adr20, dailyOpen) {
+  const unknown = {
+    dayType: 'UNKNOWN', confidence: 'LOW', auction_type: 'unknown',
+    ib_range_pct: 0, failed_auction: false, sustained_auction: false,
+    playbook_bias: 'UNKNOWN', reasoning: 'IB not yet set — cannot classify day type',
+  };
+
+  if (!ibHigh || !ibLow || !adr20 || adr20 === 0) return unknown;
+
+  const ibRange = ibHigh - ibLow;
+  const ibRangePct = +(ibRange / adr20).toFixed(3);
+
+  // Failed auction detection: price broke VAH/VAL then returned within 2 bars
+  let failedAuctionUpside = false, failedAuctionDownside = false;
+  if (todayBars && todayBars.length >= 3 && vah && val) {
+    for (let i = 1; i < todayBars.length; i++) {
+      // Broke above VAH
+      if (todayBars[i].high > vah) {
+        // Check if returned below VAH within next 2 bars
+        const next1 = todayBars[i + 1];
+        const next2 = todayBars[i + 2];
+        if ((next1 && next1.close < vah) || (next2 && next2.close < vah)) {
+          failedAuctionUpside = true;
+        }
+      }
+      // Broke below VAL
+      if (todayBars[i].low < val) {
+        const next1 = todayBars[i + 1];
+        const next2 = todayBars[i + 2];
+        if ((next1 && next1.close > val) || (next2 && next2.close > val)) {
+          failedAuctionDownside = true;
+        }
+      }
+    }
+  }
+
+  // Sustained auction: IB extended and price hasn't returned to VA in last 4 bars
+  let sustainedAuction = false;
+  if (todayBars && todayBars.length >= 4 && vah && val) {
+    const last4 = todayBars.slice(-4);
+    const allAboveVA = last4.every(b => b.low > vah);
+    const allBelowVA = last4.every(b => b.high < val);
+    const ibExtended = (ibHigh && last4[last4.length - 1].high > ibHigh) ||
+                       (ibLow && last4[last4.length - 1].low < ibLow);
+    if (ibExtended && (allAboveVA || allBelowVA)) sustainedAuction = true;
+  }
+
+  // Classification
+  let dayType, confidence, auction_type, playbook_bias, reasoning;
+
+  if (failedAuctionUpside || failedAuctionDownside) {
+    dayType = 'ASYMMETRICAL_NEUTRAL';
+    confidence = 'HIGH';
+    auction_type = failedAuctionUpside ? 'failed_upside' : 'failed_downside';
+    playbook_bias = 'PB3_PB4';
+    reasoning = `Failed auction ${failedAuctionUpside ? 'upside (broke VAH, returned)' : 'downside (broke VAL, returned)'} — countertrend setups dominate`;
+  } else if (sustainedAuction) {
+    dayType = 'TRENDING';
+    confidence = 'HIGH';
+    auction_type = 'sustained';
+    playbook_bias = 'PB1_PB2';
+    reasoning = 'Sustained auction — IB extended, price not returning to VA. Trend continuation plays.';
+  } else if (ibRangePct < 0.35) {
+    dayType = 'LIMITED_AUCTION';
+    confidence = 'MEDIUM';
+    auction_type = 'normal';
+    playbook_bias = 'PB3_ONLY';
+    reasoning = `Narrow IB (${(ibRangePct * 100).toFixed(0)}% of ADR) — limited range, reduced opportunity`;
+  } else if (ibRangePct > 0.65) {
+    dayType = 'TRENDING';
+    confidence = 'MEDIUM';
+    auction_type = 'normal';
+    playbook_bias = 'PB1_PB2';
+    reasoning = `Wide IB (${(ibRangePct * 100).toFixed(0)}% of ADR) — likely trending day`;
+  } else {
+    dayType = 'NORMAL_VARIATION';
+    confidence = 'LOW';
+    auction_type = 'normal';
+    playbook_bias = 'PB1_PB2';
+    reasoning = `Normal IB range (${(ibRangePct * 100).toFixed(0)}% of ADR) — default with-trend evaluation`;
+  }
+
+  return {
+    dayType, confidence, auction_type, ib_range_pct: ibRangePct,
+    failed_auction: failedAuctionUpside || failedAuctionDownside,
+    sustained_auction: sustainedAuction, playbook_bias, reasoning,
+  };
+}
+
 function getESTMins() {
   const now = new Date();
   const est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -1223,6 +1313,9 @@ app.get('/api/autosignal', async (req, res) => {
     const ibStatus = getIBStatus(sym);
     const ibWindow = getIBWindow(sym);
 
+    // ── Day type classification ──
+    const dayClassification = classifyDayType(todayBars, va.vah, va.val, ibHigh, ibLow, adr20, todayBars[0]?.open || currentPrice);
+
     // ── H4 zones (GAP 2 + 4) ──
     let h4Zones = { supply: [], demand: [] };
     try {
@@ -1281,6 +1374,15 @@ app.get('/api/autosignal', async (req, res) => {
       today_range: +todayRange.toFixed(2),
       yesterday_rth_bars: yesterdayRTH.length,
       today_bars: todayBars.length,
+      // Day type
+      day_type: dayClassification.dayType,
+      day_type_confidence: dayClassification.confidence,
+      auction_type: dayClassification.auction_type,
+      ib_range_pct: dayClassification.ib_range_pct,
+      playbook_bias: dayClassification.playbook_bias,
+      day_type_reasoning: dayClassification.reasoning,
+      failed_auction: dayClassification.failed_auction,
+      sustained_auction: dayClassification.sustained_auction,
       // ASR data
       current_session_name: curSess,
       adr_target_high: asrData?.daily?.targetHigh || null,
@@ -1336,6 +1438,7 @@ INITIAL BALANCE (${dataUsed.ib_window} — ${dataUsed.ib_status}):
 TREND: ${dataUsed.trend}
 M30 PATTERN (last completed bar): ${dataUsed.m30_pattern}
 ADR EXHAUSTED: ${dataUsed.adr_exhausted ? 'YES' : 'NO'}
+DAY TYPE: ${dataUsed.day_type} (${dataUsed.day_type_confidence} confidence) \u2014 ${dataUsed.day_type_reasoning}. Playbook bias: ${dataUsed.playbook_bias}. Auction: ${dataUsed.auction_type}. IB range: ${((dataUsed.ib_range_pct || 0) * 100).toFixed(0)}% of ADR.
 CURRENT SESSION: ${dataUsed.session}
 CURRENT TIME (ET): ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true })}
 IB STATUS: ${dataUsed.ib_status}

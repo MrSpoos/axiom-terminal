@@ -666,6 +666,8 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
             ["Sup\u2194VAL", dataUsed.h4_supply_conterminous ? "\u2713 CTM" : dataUsed.h4_supply_distance_from_val != null ? `${dataUsed.h4_supply_distance_from_val}pt` : null],
             ["Trend", dataUsed.trend], ["Pattern", dataUsed.m30_pattern],
             ["Session", dataUsed.session],
+            ["Day", dataUsed.day_type],
+            ["Bias", dataUsed.playbook_bias],
           ].map(([k, v]) => (
             <span key={k} style={{
               fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3,
@@ -799,6 +801,22 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
               }}>{result.conterminous_used.supply_conterminous ? "\u2713" : "\u2717"} Sup\u2194VAL {result.conterminous_used.supply_level ? `@ ${result.conterminous_used.supply_level}` : ""}</span>
             </div>
           )}
+
+          {/* Day type badge */}
+          {dataUsed?.day_type && dataUsed.day_type !== "UNKNOWN" && (() => {
+            const DT_COLORS = { TRENDING: "#4a9eff", ASYMMETRICAL_NEUTRAL: "#f6c90e", LIMITED_AUCTION: "#475569", NORMAL_VARIATION: "#00d4aa" };
+            const dtc = DT_COLORS[dataUsed.day_type] || "#475569";
+            return (
+              <div style={{ textAlign: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 9, fontFamily: MONO, fontWeight: 700, padding: "3px 10px", borderRadius: 4,
+                  color: dtc, background: dtc + "18", border: `1px solid ${dtc}33`, letterSpacing: "0.06em",
+                }}>{dataUsed.day_type.replace(/_/g, " ")}</span>
+                <div style={{ fontSize: 7, fontFamily: MONO, color: "#475569", marginTop: 3 }}>
+                  {dataUsed.auction_type !== "normal" && dataUsed.auction_type !== "unknown" ? `Auction: ${dataUsed.auction_type} \u00b7 ` : ""}Bias: {dataUsed.playbook_bias} \u00b7 IB: {((dataUsed.ib_range_pct || 0) * 100).toFixed(0)}% ADR
+                </div>
+              </div>
+            );
+          })()}
 
           {/* R target prices */}
           {result.stop && (
