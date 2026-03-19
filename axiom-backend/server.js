@@ -397,6 +397,7 @@ TRADER PROFILE:
 - Active sessions: NY DRF 10:00am ET \u00b7 NY Close 4:00pm ET
 - Phase 1 (bullish trigger): Bullish engulf OR consolidation breaking above swing high on M15/M30/H4
 - Phase 3 (bearish trigger): 3-bar reversal pattern on M15/M30/H4
+- Consolidation entries require minimum 4 candles within the range (Rule of Fours). Fewer than 4 candles = not a valid consolidation.
 - Trader experience: SEASONED (uses D1 QP levels)
 
 D1/H4 QP LEVELS \u2014 MARKET STALKERS SWING QUARTILES:
@@ -420,12 +421,19 @@ The backend has already mathematically verified whether H4 supply/demand zones a
 - conterminous_tolerance: instrument-specific tolerance in points
 When prompt says "pre-validated mathematically", trust these flags as ground truth.
 
+C-LINE QUALITY: C-lines must come from reversal formation zones (DBR demand or RBD supply). Continuation formations (DBD/RBR) are weaker \u2014 treat a weak c-line (from continuation formation) as no c-line \u2192 NO TRADE.
+
 H4 ZONE DATA \u2014 AUTO-DETECTED:
 - h4_supply_nearest: nearest supply zone level above current price
 - h4_demand_nearest: nearest demand zone level below current price
 - h4_supply_zones: array of all detected supply zones [{level, low, high, strength}]
 - h4_demand_zones: array of all detected demand zones [{level, low, high, strength}]
 Use h4_supply_nearest and h4_demand_nearest as the reference levels for conterminous checks and entry zone targeting.
+
+STEP 0 \u2014 ADR EXHAUSTION CHECK (before any playbook evaluation):
+Check if ADR is exhausted: has price moved \u2265100% of ADR from the daily open in one direction?
+- If YES \u2192 skip PB1 and PB2 entirely, go directly to PB3 (countertrend ADR exhaustion).
+- If NO \u2192 continue to Step 1.
 
 STEP 1 \u2014 DETERMINE IB STATUS
 Check current ET time against instrument IB window:
@@ -437,7 +445,7 @@ STEP 2 \u2014 EVALUATE PLAYBOOKS IN THIS EXACT ORDER
 
 PLAYBOOK #2 \u2014 WITH THE TREND \u2014 RETURN TO VAH/VAL
 IB REQUIREMENT: NONE \u2014 PB2 can fire from the open, even before IB forms.
-SESSION: Must be in NY DRF (10am ET) or NY Close (4pm ET) window.
+SESSION: Must be within a DTTZ window \u2014 London Open (07:00\u201309:00 GMT), NY Open (13:00\u201315:00 GMT), or NY Cut/DRF (15:00\u201316:00 GMT). Entry outside these windows \u2192 NO TRADE.
 NOTE: PB2 fires BEFORE checking PB1. Evaluate it first, always.
 
 PB2 UPTREND path (Open Above VAH):
@@ -446,10 +454,10 @@ PB2 UPTREND path (Open Above VAH):
 3. H4 or D1 QP level \u2014 ONLY qualifies if price RECENTLY REJECTED QLo (within last 3\u20135 sessions). QMid and QHi do NOT qualify for PB2 \u2014 route to PB3 instead. If at QLo without recent rejection \u2192 NO TRADE on PB2.
 4. D1/H4 Conterminous Demand Line ABOVE or AT VAH (use h4_demand_conterminous flag \u2014 must be true)
 5. M30 bull engulf OR consolidation at/around demand line or VAH
-6. In daytrading session (NY DRF 10am or NY Close 4pm ET)
+6. In DTTZ window (London Open 07:00\u201309:00 GMT, NY Open 13:00\u201315:00 GMT, or NY Cut/DRF 15:00\u201316:00 GMT)
 7. Profit margin: 2\u20133x up to ADR exhaustion or first supply
 \u2192 SIGNAL: LONG \u2014 INTRADAY TRADE 2R
-\u2192 If not in session: NO TRADE (session gate). If h4_demand_conterminous is false: NO TRADE. If no M30 pattern: NO TRADE (wait).
+\u2192 If not in DTTZ: NO TRADE (session gate). If h4_demand_conterminous is false: NO TRADE. If no M30 pattern: NO TRADE (wait).
 
 PB2 DOWNTREND path (Open Below VAL):
 1. Trend DOWN confirmed (price below D1 QP + QMid \u2014 lower half of swing range)
@@ -457,16 +465,21 @@ PB2 DOWNTREND path (Open Below VAL):
 3. ONLY qualifies if price RECENTLY REJECTED QHi (within last 3\u20135 sessions). QMid and QLo do NOT qualify.
 4. D1/H4 Conterminous Supply Line BELOW or AT VAL (use h4_supply_conterminous flag \u2014 must be true)
 5. M30 bear engulf OR consolidation at/around supply line or VAL
-6. In daytrading session
+6. In DTTZ window
 7. Profit margin: 3\u20135x down to ADR exhaustion or first demand
 \u2192 SIGNAL: SHORT \u2014 INTRADAY TRADE 2\u20133R
 
 PLAYBOOK #1 \u2014 WITH THE TREND \u2014 IB EXTENSION
-IB REQUIREMENT: REQUIRED \u2014 IB must be fully formed (after IB window closes).
-If ib_status = "forming" or "not_started" \u2192 Report: "PB1 PENDING \u2014 IB not yet confirmed. Re-evaluate after [IB close time] ET." Do NOT evaluate PB1 criteria yet.
 SESSION: NO session gate for PB1 \u2014 can trade outside DRF/Close windows.
 
-PB1-A: MAIN IB EXTENSION PATH
+PB1 has three paths based on VA Open:
+- ABOVE VA: Look for sustained auction upside \u2192 check conterminous demand \u2192 M30 engulf. IB NOT required.
+- INSIDE VA: Look for rejection of value \u2192 check IB extension \u2192 M30 engulf. IB REQUIRED \u2014 must be set.
+- BELOW VA: Look for failed auction downside \u2192 check conterminous demand \u2192 M30 engulf. IB NOT required.
+
+If ib_status = "forming" or "not_started" AND VA Open is INSIDE VA \u2192 Report: "PB1 PENDING \u2014 IB not yet confirmed. Re-evaluate after [IB close time] ET." ABOVE VA and BELOW VA paths can still be evaluated.
+
+PB1-A: MAIN IB EXTENSION PATH (INSIDE VA path \u2014 requires IB)
 1. Trend confirmed via D1 QP levels:
    - At D1 QHi (trend up) \u2192 route to PB3 (not PB1)
    - At D1 QMid or QLo \u2192 continue PB1 evaluation
@@ -490,9 +503,14 @@ PLAYBOOK #3 \u2014 COUNTERTREND \u2014 ADR EXHAUSTION
 IB REQUIREMENT: PARTIAL \u2014 path-specific (see below).
 SESSION: CT intraday trades MUST close at end of session (hard rule).
 
+PB3 3/3 TREND ROUTING (check before paths):
+- 3/3 aligned (H4+D1+W1 same direction) AND D1 engulf present \u2192 trend is REVERSING \u2192 route to PB1 (treat as with-trend in new direction)
+- 3/3 aligned AND no D1 engulf \u2192 NO TRADE (trend reversing but no confirmation)
+- NOT 3/3 aligned \u2192 continue PB3 countertrend evaluation below
+
 PB3 PATH A: VA REJECTION (no IB required)
 1. ADR exhausted in countertrend direction (CT Long = ADR exhausted UPSIDE, CT Short = ADR exhausted DOWNSIDE)
-2. H4 + D1 + W1 all 3/3 in same trend direction (if NOT 3/3 \u2192 skip PB3 entirely, go to PB4)
+2. NOT 3/3 aligned (confirmed above \u2014 otherwise would have routed to PB1)
 3. D1 engulf in CT direction (if no D1 engulf \u2192 route to PB4, not NO TRADE)
 4. VA rejection in CT direction
 5. Phase 1 (CT long) or Phase 3 (CT short) on M15/M30/H4
@@ -531,6 +549,15 @@ PB4 PATH C: VAH/VAL RETURN
 - Bull/bear engulf on D1/H4/M30 at VAH/VAL or D1 c-dem/c-sup
 \u2192 SIGNAL: CT INTRADAY \u2014 2\u20133R. MANDATORY: "Close at end of session"
 
+PROFIT TAKING (applies to all playbooks):
+- At 1R \u2192 move stop to breakeven
+- At 2R \u2192 take 50\u201375% partial profit (PB3: close full position at 2R)
+- Hard ceiling: close at ADR or ASR exhaustion level regardless of R-multiple
+- Trail stop to new M30 swing structure after 2R
+
+SECOND CHANCE ENTRY:
+If initial entry was missed, a pullback to the entry zone with a new M15/M30 engulf or consolidation is valid \u2014 provided all original conditions (c-line, QP, VA open, profit margin) still hold. Flag as "second chance" in criteria.
+
 CRITICAL RULES \u2014 NEVER VIOLATE:
 1. NEVER mix PB1 and PB2 criteria in the same checklist
 2. NEVER apply the session gate to PB1 \u2014 PB1 has NO session requirement
@@ -546,6 +573,12 @@ CRITICAL RULES \u2014 NEVER VIOLATE:
 12. IB pending message must include exact time IB confirms for the instrument
 13. NEVER re-calculate conterminous alignment \u2014 use pre-calculated h4_supply_conterminous / h4_demand_conterminous boolean flags as ground truth
 14. ALWAYS reference h4_supply_nearest and h4_demand_nearest for zone levels \u2014 do not estimate or guess H4 levels
+15. ADR \u2265100% from daily open \u2192 skip PB1 and PB2, go directly to PB3 (Step 0)
+16. PB2 session gate uses DTTZ windows (London Open, NY Open, NY Cut/DRF) \u2014 not the old DRF/Close gate
+17. PB3 3/3 aligned + D1 engulf \u2192 route to PB1 (trend reversing). 3/3 + no engulf \u2192 NO TRADE
+18. PB1 ABOVE/BELOW VA paths do NOT require IB. Only INSIDE VA requires IB set
+19. Consolidation = minimum 4 candles in range (Rule of Fours). Fewer = invalid
+20. C-lines from continuation formations (DBD/RBR) are weak \u2192 treat as no c-line
 
 RESPONSE FORMAT:
 {
@@ -1544,6 +1577,204 @@ app.get('/api/h4-zones', async (req, res) => {
   }
 });
 
+// ── BLAHTECH ADR/ASR LEVEL CALCULATIONS ──────────────────────────────────────
+// Equity instrument definitions (CQG symbols from Blahtech Levels)
+const EQUITY_TICK_SIZE = { ES: 0.25, NQ: 0.25, YM: 1, FDXM: 1 };
+const EQUITY_YAHOO_MAP = { ES: 'ES=F', NQ: 'NQ=F', YM: 'YM=F', FDXM: '^GDAXI' };
+const EQUITY_INSTRUMENTS = ['ES', 'NQ', 'YM', 'FDXM'];
+
+// Session open times in GMT hours
+const SESSION_TIMES = { TK: 0, LN: 7, NY: 13 };
+
+function getBlahTechSession(gmtHour) {
+  if (gmtHour >= SESSION_TIMES.NY) return 'NY';
+  if (gmtHour >= SESSION_TIMES.LN) return 'LN';
+  return 'TK';
+}
+
+function ticksToPrice(ticks, tickSize) {
+  return ticks * tickSize;
+}
+
+function computeDailyRangeLevels(dailyOpen, adrTicks, tickSize) {
+  const adrPrice = ticksToPrice(adrTicks, tickSize);
+  return {
+    dailyOpen,
+    adrTicks,
+    adrPrice: +adrPrice.toFixed(4),
+    targetHigh: +(dailyOpen + adrPrice).toFixed(2),
+    targetLow: +(dailyOpen - adrPrice).toFixed(2),
+  };
+}
+
+function computeSessionRangeLevels(sessionOpen, asrTicks, tickSize) {
+  const asrPrice = ticksToPrice(asrTicks, tickSize);
+  return {
+    sessionOpen,
+    asrTicks,
+    asrPrice: +asrPrice.toFixed(4),
+    targetHigh: +(sessionOpen + asrPrice).toFixed(2),
+    targetLow: +(sessionOpen - asrPrice).toFixed(2),
+  };
+}
+
+function computeRangeExhaustion(openPrice, currentHigh, currentLow, rangeTicks, tickSize) {
+  const rangePrice = ticksToPrice(rangeTicks, tickSize);
+  if (rangePrice === 0) return { aboveOpenPct: 0, belowOpenPct: 0, totalPct: 0 };
+  const aboveOpen = Math.max(0, currentHigh - openPrice);
+  const belowOpen = Math.max(0, openPrice - currentLow);
+  const actualRange = currentHigh - currentLow;
+  return {
+    aboveOpenPct: +((aboveOpen / rangePrice) * 100).toFixed(1),
+    belowOpenPct: +((belowOpen / rangePrice) * 100).toFixed(1),
+    totalPct: +((actualRange / rangePrice) * 100).toFixed(1),
+  };
+}
+
+// ── /api/adr-asr — Blahtech ADR/ASR Target Levels ───────────────────────────
+app.get('/api/adr-asr', async (req, res) => {
+  try {
+    const sym = (req.query.symbol || 'ES').toUpperCase();
+    if (!EQUITY_INSTRUMENTS.includes(sym)) {
+      return res.status(400).json({ error: `Invalid symbol. Supported: ${EQUITY_INSTRUMENTS.join(', ')}` });
+    }
+    const yahooSym = EQUITY_YAHOO_MAP[sym];
+    const tickSize = EQUITY_TICK_SIZE[sym];
+    const lookback = parseInt(req.query.lookback) || 5;
+
+    // Fetch daily bars (3 months) and intraday 30m bars (5 days)
+    const [chartDaily, chart30m] = await Promise.all([
+      yahooChart(yahooSym, '1d', '3mo'),
+      yahooChart(yahooSym, '30m', '5d'),
+    ]);
+
+    // Build daily OHLC bars
+    const tsD = chartDaily.timestamp || [];
+    const qD = chartDaily.indicators?.quote?.[0] || {};
+    const dailyBars = [];
+    for (let i = 0; i < tsD.length; i++) {
+      if (qD.open?.[i] != null && qD.high?.[i] != null && qD.low?.[i] != null && qD.close?.[i] != null) {
+        dailyBars.push({ ts: tsD[i], open: qD.open[i], high: qD.high[i], low: qD.low[i], close: qD.close[i] });
+      }
+    }
+
+    if (dailyBars.length < 2) {
+      return res.status(400).json({ error: 'Insufficient daily data' });
+    }
+
+    // ADR: average of (high - low) over lookback days
+    const recentDaily = dailyBars.slice(-lookback);
+    const adrPrice = recentDaily.reduce((s, b) => s + (b.high - b.low), 0) / recentDaily.length;
+    const adrTicks = Math.round(adrPrice / tickSize);
+
+    // Current price and today's open
+    const meta = chart30m.meta || chartDaily.meta || {};
+    const currentPrice = meta.regularMarketPrice || dailyBars[dailyBars.length - 1].close;
+    const todayBar = dailyBars[dailyBars.length - 1];
+    const dailyOpen = todayBar.open;
+
+    // Daily range levels
+    const dailyRange = computeDailyRangeLevels(dailyOpen, adrTicks, tickSize);
+
+    // Today's high/low for exhaustion
+    const ts30 = chart30m.timestamp || [];
+    const q30 = chart30m.indicators?.quote?.[0] || {};
+    const nowEST = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const todayStr = `${nowEST.getFullYear()}-${String(nowEST.getMonth() + 1).padStart(2, '0')}-${String(nowEST.getDate()).padStart(2, '0')}`;
+    let todayHigh = todayBar.high, todayLow = todayBar.low;
+    for (let i = 0; i < ts30.length; i++) {
+      if (q30.high?.[i] != null && q30.low?.[i] != null) {
+        const d = new Date(ts30[i] * 1000);
+        const est = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const ds = `${est.getFullYear()}-${String(est.getMonth() + 1).padStart(2, '0')}-${String(est.getDate()).padStart(2, '0')}`;
+        if (ds === todayStr) {
+          todayHigh = Math.max(todayHigh, q30.high[i]);
+          todayLow = Math.min(todayLow, q30.low[i]);
+        }
+      }
+    }
+
+    const dailyExhaustion = computeRangeExhaustion(dailyOpen, todayHigh, todayLow, adrTicks, tickSize);
+
+    // Session ranges — compute ASR per session from intraday bars grouped by session
+    const gmtNow = new Date();
+    const gmtHour = gmtNow.getUTCHours();
+    const currentSession = getBlahTechSession(gmtHour);
+
+    // Group recent daily bars by session windows to compute per-session high/low
+    // Use 30m bars for session-based ASR calculation
+    const sessionBuckets = { TK: [], LN: [], NY: [] };
+    const bars30m = [];
+    for (let i = 0; i < ts30.length; i++) {
+      if (q30.open?.[i] != null && q30.high?.[i] != null && q30.low?.[i] != null && q30.close?.[i] != null) {
+        bars30m.push({ ts: ts30[i], open: q30.open[i], high: q30.high[i], low: q30.low[i], close: q30.close[i] });
+      }
+    }
+
+    // Group bars by date and session
+    const daySessionMap = {}; // { 'YYYY-MM-DD': { TK: {high, low}, LN: {high, low}, NY: {high, low} } }
+    for (const bar of bars30m) {
+      const d = new Date(bar.ts * 1000);
+      const utcH = d.getUTCHours();
+      const session = getBlahTechSession(utcH);
+      const dateKey = d.toISOString().slice(0, 10);
+      if (!daySessionMap[dateKey]) daySessionMap[dateKey] = {};
+      if (!daySessionMap[dateKey][session]) daySessionMap[dateKey][session] = { high: -Infinity, low: Infinity, open: bar.open };
+      daySessionMap[dateKey][session].high = Math.max(daySessionMap[dateKey][session].high, bar.high);
+      daySessionMap[dateKey][session].low = Math.min(daySessionMap[dateKey][session].low, bar.low);
+    }
+
+    // Calculate ASR per session: average session range over available days
+    const sessionRanges = {};
+    for (const sess of ['TK', 'LN', 'NY']) {
+      const ranges = [];
+      for (const [dateKey, sessions] of Object.entries(daySessionMap)) {
+        if (sessions[sess] && sessions[sess].high > -Infinity) {
+          ranges.push(sessions[sess].high - sessions[sess].low);
+        }
+      }
+      const asrPrice = ranges.length > 0 ? ranges.reduce((s, r) => s + r, 0) / ranges.length : 0;
+      const asrTicks = Math.round(asrPrice / tickSize);
+      sessionBuckets[sess] = { asrTicks, asrPrice: +asrPrice.toFixed(4), days: ranges.length };
+    }
+
+    // Current session open + levels
+    const todayKey = gmtNow.toISOString().slice(0, 10);
+    const todaySessionData = daySessionMap[todayKey] || {};
+    const sessionLevels = {};
+    for (const sess of ['TK', 'LN', 'NY']) {
+      const sd = todaySessionData[sess];
+      if (sd && sd.open && sessionBuckets[sess].asrTicks > 0) {
+        const levels = computeSessionRangeLevels(sd.open, sessionBuckets[sess].asrTicks, tickSize);
+        const exh = computeRangeExhaustion(sd.open, sd.high, sd.low, sessionBuckets[sess].asrTicks, tickSize);
+        sessionLevels[sess] = { ...levels, exhaustion: exh, sessionHigh: +sd.high.toFixed(2), sessionLow: +sd.low.toFixed(2) };
+      } else {
+        sessionLevels[sess] = null;
+      }
+    }
+
+    res.json({
+      success: true,
+      symbol: sym,
+      tickSize,
+      currentPrice: +currentPrice.toFixed(2),
+      currentSession,
+      daily: {
+        ...dailyRange,
+        exhaustion: dailyExhaustion,
+        todayHigh: +todayHigh.toFixed(2),
+        todayLow: +todayLow.toFixed(2),
+        lookbackDays: recentDaily.length,
+      },
+      sessions: sessionLevels,
+      sessionASR: sessionBuckets,
+    });
+  } catch (err) {
+    console.error('ADR/ASR error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -1563,6 +1794,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
   console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
   console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
+  console.log(`   /api/adr-asr     — Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
   if (!FRED_KEY) {
     console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);
