@@ -556,7 +556,7 @@ function FailedPlaybooks({ items }) {
 }
 
 // ── AUTO SIGNAL ENGINE ───────────────────────────────────────────────────────
-function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoaded }) {
+function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoaded, onLogSignal }) {
   const [result, setResult] = useState(null);
   const [dataUsed, setDataUsed] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -932,12 +932,29 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
             <FailedPlaybooks items={result.failed_playbooks} />
           )}
 
-          {/* Timestamp */}
-          {result.ts && (
-            <div style={{ fontSize: 7, color: "#1e293b", fontFamily: MONO, marginTop: 6, textAlign: "right" }}>
-              {new Date(result.ts).toLocaleTimeString()} ET {timeAgo && `\u00b7 ${timeAgo}`}
-            </div>
-          )}
+          {/* Timestamp + Log button */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+            {result.ts && (
+              <span style={{ fontSize: 7, color: "#1e293b", fontFamily: MONO }}>
+                {new Date(result.ts).toLocaleTimeString()} ET {timeAgo && `\u00b7 ${timeAgo}`}
+              </span>
+            )}
+            {onLogSignal && result.signal && result.signal !== "NO TRADE" && (
+              <button onClick={() => onLogSignal({
+                instrument: selectedInstrument,
+                playbook: result.playbook_selected || result.playbook || "",
+                direction: result.signal,
+                entry_price: String(dataUsed?.current_price || ""),
+                stop_price: String(result.stop || ""),
+                target_price: String(result.target_1r || ""),
+                day_type: dataUsed?.day_type || "",
+              })} style={{
+                fontSize: 7, fontWeight: 700, fontFamily: MONO, letterSpacing: "0.06em",
+                padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+                background: "rgba(74,158,255,0.1)", border: "1px solid rgba(74,158,255,0.25)", color: "#4a9eff",
+              }}>LOG THIS SIGNAL</button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -2042,16 +2059,237 @@ function InstrumentScanner() {
   );
 }
 
+// ── TRADE JOURNAL ─────────────────────────────────────────────────────────────
+const PLAYBOOK_OPTIONS = ["PB1-A","PB1-B","PB2","PB3-A","PB3-B","PB4-A","PB4-B","PB4-C"];
+const DAY_TYPE_OPTIONS = ["TRENDING","ASYMMETRICAL_NEUTRAL","LIMITED_AUCTION","NORMAL_VARIATION"];
+
+function TradeJournal({ prefill, onClearPrefill }) {
+  const [view, setView] = useState(prefill ? "log" : "list"); // "log" | "list"
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState("all"); // all | open | closed | instrument | playbook
+  const [expandedId, setExpandedId] = useState(null);
+  const [editExit, setEditExit] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+
+  // Form state
+  const now = new Date();
+  const [form, setForm] = useState({
+    date: now.toISOString().split("T")[0],
+    time: now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    instrument: "ES", playbook: "PB2", direction: "LONG",
+    entry_price: "", stop_price: "", target_price: "",
+    exit_price: "", day_type: "", notes: "", screenshot: null,
+  });
+
+  const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Apply prefill
+  useEffect(() => {
+    if (!prefill) return;
+    setForm(f => ({ ...f, ...prefill }));
+    setView("log");
+    if (onClearPrefill) onClearPrefill();
+  }, [prefill, onClearPrefill]);
+
+  // Load entries
+  const loadEntries = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/journal`);
+      const d = await r.json();
+      if (d.success) setEntries(d.entries || []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadEntries(); }, [loadEntries]);
+
+  // R:R calc
+  const entryP = parseFloat(form.entry_price), stopP = parseFloat(form.stop_price), targetP = parseFloat(form.target_price), exitP = parseFloat(form.exit_price);
+  const risk = entryP && stopP ? Math.abs(entryP - stopP) : 0;
+  const rrRatio = risk > 0 && targetP ? +((form.direction === "LONG" ? targetP - entryP : entryP - targetP) / risk).toFixed(2) : null;
+  const pnlR = risk > 0 && exitP ? +((form.direction === "LONG" ? exitP - entryP : entryP - exitP) / risk).toFixed(2) : null;
+
+  // Save
+  const saveTrade = useCallback(async () => {
+    setLoading(true);
+    try {
+      const body = { ...form, entry_price: entryP || null, stop_price: stopP || null, target_price: targetP || null, exit_price: exitP || null, status: exitP ? "closed" : "open" };
+      const r = await fetch(`${BACKEND_URL}/api/journal`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.success) { await loadEntries(); setView("list"); setForm(f => ({ ...f, entry_price: "", stop_price: "", target_price: "", exit_price: "", notes: "", screenshot: null })); }
+    } catch {}
+    setLoading(false);
+  }, [form, entryP, stopP, targetP, exitP, loadEntries]);
+
+  // Update entry
+  const updateEntry = useCallback(async (id) => {
+    try {
+      const body = { exit_price: parseFloat(editExit) || null, notes: editNotes };
+      const r = await fetch(`${BACKEND_URL}/api/journal/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if ((await r.json()).success) { await loadEntries(); setExpandedId(null); }
+    } catch {}
+  }, [editExit, editNotes, loadEntries]);
+
+  // Delete
+  const deleteEntry = useCallback(async (id) => {
+    try {
+      await fetch(`${BACKEND_URL}/api/journal/${id}`, { method: "DELETE" });
+      await loadEntries();
+    } catch {}
+  }, [loadEntries]);
+
+  // Stats
+  const closed = entries.filter(e => e.status === "closed" && e.pnl_r != null);
+  const wins = closed.filter(e => e.pnl_r > 0);
+  const winRate = closed.length > 0 ? +((wins.length / closed.length) * 100).toFixed(0) : 0;
+  const avgR = closed.length > 0 ? +(closed.reduce((s, e) => s + e.pnl_r, 0) / closed.length).toFixed(2) : 0;
+  const bestPB = (() => {
+    const byPB = {};
+    closed.forEach(e => { if (!byPB[e.playbook]) byPB[e.playbook] = { wins: 0, total: 0 }; byPB[e.playbook].total++; if (e.pnl_r > 0) byPB[e.playbook].wins++; });
+    let best = null, bestRate = 0;
+    for (const [pb, s] of Object.entries(byPB)) { const r = s.total >= 2 ? s.wins / s.total : 0; if (r > bestRate) { bestRate = r; best = pb; } }
+    return best;
+  })();
+
+  // Filter
+  const filtered = entries.filter(e => {
+    if (filter === "open") return e.status === "open";
+    if (filter === "closed") return e.status === "closed";
+    if (INSTRUMENTS.includes(filter)) return e.instrument === filter;
+    if (PLAYBOOK_OPTIONS.includes(filter)) return e.playbook === filter;
+    return true;
+  });
+
+  const inputStyle = { background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 3, padding: "4px 6px", color: "#e2e8f0", fontSize: 10, fontFamily: MONO, outline: "none", width: "100%" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Toggle */}
+      <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
+        {[["log", "LOG TRADE"], ["list", `JOURNAL (${entries.length})`]].map(([k, l]) => (
+          <button key={k} onClick={() => setView(k)} style={{ flex: 1, padding: "5px 0", fontSize: 8, fontWeight: 700, fontFamily: MONO, letterSpacing: "0.08em", borderRadius: 3, cursor: "pointer", border: "none", background: view === k ? "rgba(74,158,255,0.2)" : "transparent", color: view === k ? "#4a9eff" : "#475569" }}>{l}</button>
+        ))}
+      </div>
+
+      {view === "log" ? (
+        /* ── LOG TRADE FORM ── */
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>DATE</div><input type="date" value={form.date} onChange={e => sf("date", e.target.value)} style={inputStyle} /></div>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>TIME (ET)</div><input value={form.time} onChange={e => sf("time", e.target.value)} style={inputStyle} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+            {INSTRUMENTS.map(i => (
+              <button key={i} onClick={() => sf("instrument", i)} style={{ fontSize: 8, fontFamily: MONO, fontWeight: 600, padding: "3px 8px", borderRadius: 10, cursor: "pointer", background: form.instrument === i ? "rgba(74,158,255,0.2)" : "rgba(255,255,255,0.04)", border: `1px solid ${form.instrument === i ? "rgba(74,158,255,0.4)" : "rgba(255,255,255,0.08)"}`, color: form.instrument === i ? "#4a9eff" : "#475569" }}>{i}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
+            {PLAYBOOK_OPTIONS.map(p => (
+              <button key={p} onClick={() => sf("playbook", p)} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, cursor: "pointer", background: form.playbook === p ? "rgba(74,158,255,0.15)" : "rgba(255,255,255,0.03)", border: `1px solid ${form.playbook === p ? "rgba(74,158,255,0.3)" : "rgba(255,255,255,0.06)"}`, color: form.playbook === p ? "#4a9eff" : "#475569" }}>{p}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+            {["LONG", "SHORT"].map(d => (
+              <button key={d} onClick={() => sf("direction", d)} style={{ flex: 1, padding: "5px 0", fontSize: 9, fontWeight: 700, fontFamily: MONO, borderRadius: 4, cursor: "pointer", border: "none", background: form.direction === d ? (d === "LONG" ? "rgba(0,212,170,0.15)" : "rgba(255,77,109,0.15)") : "rgba(255,255,255,0.04)", color: form.direction === d ? (d === "LONG" ? "#00d4aa" : "#ff4d6d") : "#475569" }}>{d}</button>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>ENTRY</div><input type="number" value={form.entry_price} onChange={e => sf("entry_price", e.target.value)} style={inputStyle} placeholder="Entry" /></div>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>STOP</div><input type="number" value={form.stop_price} onChange={e => sf("stop_price", e.target.value)} style={inputStyle} placeholder="Stop" /></div>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>TARGET</div><input type="number" value={form.target_price} onChange={e => sf("target_price", e.target.value)} style={inputStyle} placeholder="Target" /></div>
+          </div>
+          {rrRatio != null && (
+            <div style={{ fontSize: 8, fontFamily: MONO, textAlign: "center", color: rrRatio >= 2 ? "#00d4aa" : rrRatio >= 1 ? "#f6c90e" : "#ff4d6d" }}>R:R = {rrRatio}:1</div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>EXIT PRICE</div><input type="number" value={form.exit_price} onChange={e => sf("exit_price", e.target.value)} style={inputStyle} placeholder="Fill later" /></div>
+            <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>DAY TYPE</div>
+              <select value={form.day_type} onChange={e => sf("day_type", e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                <option value="">—</option>
+                {DAY_TYPE_OPTIONS.map(d => <option key={d} value={d}>{d.replace(/_/g, " ")}</option>)}
+              </select>
+            </div>
+          </div>
+          {pnlR != null && (
+            <div style={{ fontSize: 9, fontFamily: MONO, textAlign: "center", fontWeight: 700, color: pnlR > 0 ? "#00d4aa" : pnlR < 0 ? "#ff4d6d" : "#475569" }}>PnL: {pnlR > 0 ? "+" : ""}{pnlR}R</div>
+          )}
+          <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>NOTES</div><textarea value={form.notes} onChange={e => sf("notes", e.target.value)} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="Trade notes..." /></div>
+          <button onClick={saveTrade} disabled={loading} style={{ padding: "8px 0", fontSize: 10, fontWeight: 700, fontFamily: MONO, letterSpacing: "0.1em", background: "rgba(74,158,255,0.15)", border: "1px solid rgba(74,158,255,0.3)", borderRadius: 5, color: "#4a9eff", cursor: loading ? "default" : "pointer" }}>{loading ? "SAVING..." : "SAVE TRADE"}</button>
+        </div>
+      ) : (
+        /* ── VIEW JOURNAL ── */
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* Stats row */}
+          <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, background: "rgba(255,255,255,0.04)", color: "#94a3b8" }}>{entries.length} trades</span>
+            <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, background: "rgba(255,255,255,0.04)", color: winRate >= 50 ? "#00d4aa" : "#ff4d6d" }}>Win: {winRate}%</span>
+            <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, background: "rgba(255,255,255,0.04)", color: avgR > 0 ? "#00d4aa" : "#ff4d6d" }}>Avg: {avgR > 0 ? "+" : ""}{avgR}R</span>
+            {bestPB && <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, background: "rgba(74,158,255,0.08)", color: "#4a9eff" }}>Best: {bestPB}</span>}
+          </div>
+          {/* Filter pills */}
+          <div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "center" }}>
+            {["all", "open", "closed", ...INSTRUMENTS].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{ fontSize: 7, fontFamily: MONO, padding: "2px 5px", borderRadius: 3, cursor: "pointer", border: `1px solid ${filter === f ? "rgba(74,158,255,0.3)" : "rgba(255,255,255,0.06)"}`, background: filter === f ? "rgba(74,158,255,0.1)" : "transparent", color: filter === f ? "#4a9eff" : "#334155" }}>{f}</button>
+            ))}
+          </div>
+          {/* Trade cards */}
+          {filtered.length === 0 && <div style={{ fontSize: 9, fontFamily: MONO, color: "#334155", textAlign: "center", padding: 20 }}>No trades recorded yet</div>}
+          {filtered.map(e => {
+            const isExpanded = expandedId === e.id;
+            const pCol = e.pnl_r != null ? (e.pnl_r > 0 ? "#00d4aa" : e.pnl_r < 0 ? "#ff4d6d" : "#475569") : "#475569";
+            return (
+              <div key={e.id} onClick={() => { if (!isExpanded) { setExpandedId(e.id); setEditExit(e.exit_price != null ? String(e.exit_price) : ""); setEditNotes(e.notes || ""); } }}
+                style={{ background: "rgba(0,0,0,0.25)", borderRadius: 5, padding: 8, cursor: "pointer", border: `1px solid ${e.status === "open" ? "rgba(74,158,255,0.15)" : "rgba(255,255,255,0.05)"}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+                  <span style={{ fontSize: 8, fontFamily: MONO, color: "#64748b" }}>{e.date} {e.time}</span>
+                  <span style={{ fontSize: 8, fontFamily: MONO, fontWeight: 700, color: "#e2e8f0" }}>{e.instrument}</span>
+                  <span style={{ fontSize: 7, fontFamily: MONO, padding: "1px 4px", borderRadius: 2, background: e.direction === "LONG" ? "rgba(0,212,170,0.12)" : "rgba(255,77,109,0.12)", color: e.direction === "LONG" ? "#00d4aa" : "#ff4d6d" }}>{e.direction}</span>
+                  <span style={{ fontSize: 7, fontFamily: MONO, color: "#475569" }}>{e.playbook}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 9, fontFamily: MONO, fontWeight: 700, color: pCol }}>{e.pnl_r != null ? `${e.pnl_r > 0 ? "+" : ""}${e.pnl_r}R` : e.status === "open" ? "OPEN" : "\u2014"}</span>
+                </div>
+                <div style={{ fontSize: 7, fontFamily: MONO, color: "#334155" }}>
+                  Entry: {e.entry_price} | Stop: {e.stop_price} | Target: {e.target_price}{e.exit_price != null ? ` | Exit: ${e.exit_price}` : ""}
+                </div>
+                {e.notes && !isExpanded && <div style={{ fontSize: 7, fontFamily: MONO, color: "#1e293b", marginTop: 2 }}>{e.notes.slice(0, 60)}{e.notes.length > 60 ? "..." : ""}</div>}
+                {/* Expanded edit */}
+                {isExpanded && (
+                  <div style={{ marginTop: 6, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 6 }} onClick={ev => ev.stopPropagation()}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 4 }}>
+                      <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>EXIT PRICE</div><input type="number" value={editExit} onChange={ev => setEditExit(ev.target.value)} style={inputStyle} /></div>
+                      <div><div style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>NOTES</div><input value={editNotes} onChange={ev => setEditNotes(ev.target.value)} style={inputStyle} /></div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => updateEntry(e.id)} style={{ flex: 1, padding: "4px 0", fontSize: 8, fontWeight: 700, fontFamily: MONO, background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 3, color: "#00d4aa", cursor: "pointer" }}>UPDATE</button>
+                      <button onClick={() => deleteEntry(e.id)} style={{ padding: "4px 8px", fontSize: 8, fontFamily: MONO, background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.15)", borderRadius: 3, color: "#ff4d6d", cursor: "pointer" }}>DEL</button>
+                      <button onClick={() => setExpandedId(null)} style={{ padding: "4px 8px", fontSize: 8, fontFamily: MONO, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 3, color: "#475569", cursor: "pointer" }}>CLOSE</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function SignalsPanel() {
-  const [mode, setMode] = useState("auto"); // "auto" | "chart" | "ai" | "manual" | "calc"
+  const [mode, setMode] = useState("auto");
   const [selectedInstrument, setSelectedInstrument] = useState("ES");
   const [chartData, setChartData] = useState(null);
+  const [journalPrefill, setJournalPrefill] = useState(null);
   const zoneAlerts = useZoneAlerts(selectedInstrument);
 
   const handleChartAutoFill = useCallback((data) => {
     setChartData(data);
     setMode("ai");
+  }, []);
+
+  const handleLogSignal = useCallback((prefill) => {
+    setJournalPrefill(prefill);
+    setMode("journal");
   }, []);
 
   return (
@@ -2098,7 +2336,7 @@ export default function SignalsPanel() {
 
       {/* Mode toggle */}
       <div style={{ display: "flex", gap: 2, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 2 }}>
-        {[["auto", "AUTO"], ["scanner", "SCAN"], ["chart", "CHART"], ["ai", "ANALYSER"], ["manual", "MANUAL"], ["calc", "ATR"]].map(([k, label]) => (
+        {[["auto", "AUTO"], ["scanner", "SCAN"], ["chart", "CHART"], ["ai", "ANALYSER"], ["manual", "MANUAL"], ["calc", "ATR"], ["journal", "LOG"]].map(([k, label]) => (
           <button key={k} onClick={() => setMode(k)} style={{
             flex: 1, padding: "5px 0", fontSize: 8, fontWeight: 700,
             fontFamily: MONO, letterSpacing: "0.08em", borderRadius: 3,
@@ -2111,12 +2349,13 @@ export default function SignalsPanel() {
 
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} onZonesLoaded={zoneAlerts.setZones} />}
+        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} onZonesLoaded={zoneAlerts.setZones} onLogSignal={handleLogSignal} />}
         {mode === "scanner" && <InstrumentScanner />}
         {mode === "chart" && <ChartAnalyser onAutoFill={handleChartAutoFill} />}
         {mode === "ai" && <AISignalAnalyser chartData={chartData} onZonesLoaded={zoneAlerts.setZones} />}
         {mode === "calc" && <ATRCalculator />}
         {mode === "manual" && <ManualDecisionTree selectedInstrument={selectedInstrument} />}
+        {mode === "journal" && <TradeJournal prefill={journalPrefill} onClearPrefill={() => setJournalPrefill(null)} />}
       </div>
     </div>
   );

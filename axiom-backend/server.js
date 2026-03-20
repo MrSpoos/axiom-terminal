@@ -3,6 +3,9 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const RSSParser = require('rss-parser');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -2083,6 +2086,95 @@ app.get('/api/scanner', async (req, res) => {
   }
 });
 
+// ── /api/journal — Trade Journal CRUD ─────────────────────────────────────────
+const JOURNAL_FILE = path.join(__dirname, 'journal.json');
+
+function readJournal() {
+  try { return JSON.parse(fs.readFileSync(JOURNAL_FILE, 'utf8')); }
+  catch { return []; }
+}
+
+function writeJournal(entries) {
+  try { fs.writeFileSync(JOURNAL_FILE, JSON.stringify(entries, null, 2)); }
+  catch (e) { console.error('Journal write error:', e.message); }
+}
+
+app.get('/api/journal', (req, res) => {
+  const entries = readJournal().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  res.json({ success: true, entries, count: entries.length });
+});
+
+app.post('/api/journal', (req, res) => {
+  const d = req.body;
+  if (!d.instrument || !d.direction) return res.status(400).json({ error: 'instrument and direction required' });
+  const entry = {
+    id: crypto.randomUUID(),
+    created_at: new Date().toISOString(),
+    date: d.date || new Date().toISOString().split('T')[0],
+    time: d.time || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' }),
+    instrument: d.instrument,
+    playbook: d.playbook || null,
+    direction: d.direction,
+    entry_price: d.entry_price != null ? Number(d.entry_price) : null,
+    stop_price: d.stop_price != null ? Number(d.stop_price) : null,
+    target_price: d.target_price != null ? Number(d.target_price) : null,
+    exit_price: d.exit_price != null ? Number(d.exit_price) : null,
+    pnl_r: null,
+    day_type: d.day_type || null,
+    notes: d.notes || '',
+    screenshot: d.screenshot || null,
+    status: d.status || 'open',
+  };
+  // Calculate PnL in R
+  if (entry.exit_price != null && entry.entry_price != null && entry.stop_price != null) {
+    const risk = Math.abs(entry.entry_price - entry.stop_price);
+    if (risk > 0) {
+      const pnl = entry.direction === 'LONG' ? entry.exit_price - entry.entry_price : entry.entry_price - entry.exit_price;
+      entry.pnl_r = +(pnl / risk).toFixed(2);
+    }
+  }
+  const entries = readJournal();
+  entries.push(entry);
+  writeJournal(entries);
+  res.json({ success: true, entry });
+});
+
+app.put('/api/journal/:id', (req, res) => {
+  const entries = readJournal();
+  const idx = entries.findIndex(e => e.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Entry not found' });
+  const d = req.body;
+  const entry = entries[idx];
+  // Update allowed fields
+  if (d.exit_price !== undefined) entry.exit_price = d.exit_price != null ? Number(d.exit_price) : null;
+  if (d.notes !== undefined) entry.notes = d.notes;
+  if (d.status !== undefined) entry.status = d.status;
+  if (d.stop_price !== undefined) entry.stop_price = d.stop_price != null ? Number(d.stop_price) : null;
+  if (d.target_price !== undefined) entry.target_price = d.target_price != null ? Number(d.target_price) : null;
+  if (d.screenshot !== undefined) entry.screenshot = d.screenshot;
+  // Recalculate PnL
+  if (entry.exit_price != null && entry.entry_price != null && entry.stop_price != null) {
+    const risk = Math.abs(entry.entry_price - entry.stop_price);
+    if (risk > 0) {
+      const pnl = entry.direction === 'LONG' ? entry.exit_price - entry.entry_price : entry.entry_price - entry.exit_price;
+      entry.pnl_r = +(pnl / risk).toFixed(2);
+      entry.status = 'closed';
+    }
+  }
+  entries[idx] = entry;
+  writeJournal(entries);
+  res.json({ success: true, entry });
+});
+
+app.delete('/api/journal/:id', (req, res) => {
+  let entries = readJournal();
+  const len = entries.length;
+  entries = entries.filter(e => e.id !== req.params.id);
+  if (entries.length === len) return res.status(404).json({ error: 'Entry not found' });
+  writeJournal(entries);
+  res.json({ success: true });
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -2100,6 +2192,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
   console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
+  console.log(`   /api/journal     — Trade Journal CRUD`);
   console.log(`   /api/scanner     — Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
   console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
