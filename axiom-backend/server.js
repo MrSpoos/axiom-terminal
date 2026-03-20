@@ -6,6 +6,12 @@ const RSSParser = require('rss-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Internal base URL for self-calls (scanner → autosignal, autosignal → adr-asr)
+function getInternalUrl(req) {
+  if (req) return `${req.protocol}://${req.get('host')}`;
+  return process.env.BACKEND_URL || `http://localhost:${PORT}`;
+}
 const FRED_KEY = process.env.FRED_API_KEY;
 
 // ── HEALTH ROUTES (before any middleware) ─────────────────────────────────────
@@ -1455,7 +1461,7 @@ app.get('/api/autosignal', async (req, res) => {
     // ── ADR/ASR levels ──
     let asrData = null;
     try {
-      const asrRes = await fetch(`http://localhost:${PORT}/api/adr-asr?symbol=${sym}`, { headers: { 'User-Agent': 'AxiomAutoSignal/1.0' } });
+      const asrRes = await fetch(`${getInternalUrl(req)}/api/adr-asr?symbol=${sym}`, { headers: { 'User-Agent': 'AxiomAutoSignal/1.0' } });
       const asrJson = await asrRes.json();
       if (asrJson.success) asrData = asrJson;
     } catch (e) { console.warn('ASR fetch failed:', e.message); }
@@ -2030,12 +2036,13 @@ app.get('/api/scanner', async (req, res) => {
   const instruments = ['ES', 'NQ', 'DAX', 'XAU', 'OIL'];
   const TIMEOUT_MS = 15000;
 
+  const baseUrl = getInternalUrl(req);
+
   const scanOne = async (sym) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-      // Use internal autosignal logic by calling our own endpoint
-      const url = `http://localhost:${PORT}/api/autosignal?symbol=${sym}`;
+      const url = `${baseUrl}/api/autosignal?symbol=${sym}`;
       const r = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'AxiomScanner/1.0' } });
       clearTimeout(timer);
       const d = await r.json();
