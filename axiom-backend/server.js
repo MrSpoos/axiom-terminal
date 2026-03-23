@@ -1522,6 +1522,24 @@ app.get('/api/autosignal', async (req, res) => {
       } : null,
     };
 
+    // ── Pre-calculate stops & targets ──
+    const entryPrice = currentPrice;
+    const r = Math.round(atr14 * 100) / 100;
+    const preCalc = {
+      entry: entryPrice,
+      r_value: r,
+      long_stop:       Math.round((entryPrice - r) * 100) / 100,
+      long_target_1r:  Math.round((entryPrice + r) * 100) / 100,
+      long_target_2r:  Math.round((entryPrice + r * 2) * 100) / 100,
+      long_target_3r:  Math.round((entryPrice + r * 3) * 100) / 100,
+      short_stop:      Math.round((entryPrice + r) * 100) / 100,
+      short_target_1r: Math.round((entryPrice - r) * 100) / 100,
+      short_target_2r: Math.round((entryPrice - r * 2) * 100) / 100,
+      short_target_3r: Math.round((entryPrice - r * 3) * 100) / 100,
+    };
+    dataUsed.entry_price = preCalc.entry;
+    dataUsed.r_value = preCalc.r_value;
+
     // ── Call Claude ──
     const userPrompt = `Analyse this LIVE market data for ${sym} and determine the correct Axiom Edge playbook signal:
 
@@ -1576,7 +1594,21 @@ ${dataUsed.asr_sessions ? `- TK ASR: ${dataUsed.asr_sessions.TK?.target_high || 
 ASR exhaustion for current session (${dataUsed.asr_current_session}): ${dataUsed.asr_exhaustion_pct ?? 'N/A'}% \u2014 if >100%, session range is exhausted, treat as hard ceiling for profit targets.
 
 IMPORTANT: Check time context. If IB not yet formed, PB2 may still fire (no IB required). PB1 requires IB set.
-Calculate stop = entry \u00b1 1x ATR. Calculate 1R/2R/3R targets from entry using ATR.`;
+
+PRE-CALCULATED STOPS & TARGETS (use these exact values \u2014 do NOT recalculate):
+Entry (current price): ${preCalc.entry}
+1R value (D1 ATR14): ${preCalc.r_value}
+If signal is LONG:
+  stop = ${preCalc.long_stop}
+  target_1r = ${preCalc.long_target_1r}
+  target_2r = ${preCalc.long_target_2r}
+  target_3r = ${preCalc.long_target_3r}
+If signal is SHORT:
+  stop = ${preCalc.short_stop}
+  target_1r = ${preCalc.short_target_1r}
+  target_2r = ${preCalc.short_target_2r}
+  target_3r = ${preCalc.short_target_3r}
+CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r, target_3r JSON fields. Never estimate or adjust these numbers.`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
