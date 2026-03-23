@@ -1524,7 +1524,7 @@ app.get('/api/autosignal', async (req, res) => {
 
     // ── Pre-calculate stops & targets ──
     const entryPrice = currentPrice;
-    const r = Math.round(atr14 * 100) / 100;
+    const r = Math.round(atr14 * 0.5 * 100) / 100;  // 0.5x ATR14 for intraday default
     const preCalc = {
       entry: entryPrice,
       r_value: r,
@@ -1597,7 +1597,8 @@ IMPORTANT: Check time context. If IB not yet formed, PB2 may still fire (no IB r
 
 PRE-CALCULATED STOPS & TARGETS (use these exact values \u2014 do NOT recalculate):
 Entry (current price): ${preCalc.entry}
-1R value (D1 ATR14): ${preCalc.r_value}
+1R value (0.5x D1 ATR14): ${preCalc.r_value}
+D1 ATR14 (full): ${atr14}
 If signal is LONG:
   stop = ${preCalc.long_stop}
   target_1r = ${preCalc.long_target_1r}
@@ -1608,6 +1609,7 @@ If signal is SHORT:
   target_1r = ${preCalc.short_target_1r}
   target_2r = ${preCalc.short_target_2r}
   target_3r = ${preCalc.short_target_3r}
+Stop is pre-calculated at 0.5x ATR14 for intraday setups. For PB4 swing path, you may note that a wider 1x ATR stop is appropriate but use the provided values for the JSON fields.
 CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r, target_3r JSON fields. Never estimate or adjust these numbers.`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1620,6 +1622,7 @@ CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
+        temperature: 0,
         system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${AUTOSIGNAL_SYSTEM}`,
         messages: [{ role: 'user', content: userPrompt }],
       }),
