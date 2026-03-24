@@ -1646,6 +1646,21 @@ CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r
       return res.json({ success: true, signal: null, data_used: dataUsed, ai_error: 'Invalid AI response', raw: cleaned, ts: new Date().toISOString() });
     }
 
+    // Override stop/target with pre-calculated values — never trust Claude's math
+    if (signal && preCalc) {
+      if (signal.signal === 'LONG') {
+        signal.stop = preCalc.long_stop;
+        signal.target_1r = preCalc.long_target_1r;
+        signal.target_2r = preCalc.long_target_2r;
+        signal.target_3r = preCalc.long_target_3r;
+      } else if (signal.signal === 'SHORT') {
+        signal.stop = preCalc.short_stop;
+        signal.target_1r = preCalc.short_target_1r;
+        signal.target_2r = preCalc.short_target_2r;
+        signal.target_3r = preCalc.short_target_3r;
+      }
+    }
+
     // Attach data_used to signal
     signal.data_used = dataUsed;
     res.json({ success: true, signal, data_used: dataUsed, ts: new Date().toISOString() });
