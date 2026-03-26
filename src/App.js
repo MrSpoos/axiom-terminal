@@ -169,7 +169,7 @@ function useLiveMarket() {
   }, []);
   useEffect(() => {
     fetchMarket();
-    const interval = setInterval(fetchMarket, 60000);
+    const interval = setInterval(fetchMarket, 10000);
     return () => clearInterval(interval);
   }, [fetchMarket]);
   return { market, marketStatus, refreshMarket: fetchMarket };
@@ -519,6 +519,8 @@ function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStat
     { sym: "VIX",  name: "CBOE Volatility",    data: market?.vix, color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
     { sym: "ES",   name: "E-mini S&P 500",      data: market?.es,  color: "#4a9eff",  accentBg: "rgba(74,158,255,0.06)",  accentBorder: "rgba(74,158,255,0.2)"  },
     { sym: "NQ",   name: "E-mini Nasdaq 100",   data: market?.nq,  color: "#a78bfa",  accentBg: "rgba(167,139,250,0.06)", accentBorder: "rgba(167,139,250,0.2)" },
+    { sym: "GC",   name: "Gold Futures",         data: market?.gc,  color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
+    { sym: "CL",   name: "Crude Oil Futures",    data: market?.cl,  color: "#00d4aa",  accentBg: "rgba(0,212,170,0.06)",   accentBorder: "rgba(0,212,170,0.2)"   },
   ];
   return (
     <div>
@@ -544,15 +546,19 @@ function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStat
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'IBM Plex Mono', monospace" }}>{sym}</span>
-                {marketStatus === "live" && <span style={{ fontSize: 8, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace" }}>● LIVE</span>}
+                {data?.source === "databento" ? (
+                  <span style={{ fontSize: 7, fontWeight: 700, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(0,212,170,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>LIVE</span>
+                ) : marketStatus === "live" ? (
+                  <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(246,201,14,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>DELAYED</span>
+                ) : null}
               </div>
               <div style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{name}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9", fontFamily: "'IBM Plex Mono', monospace" }}>
-                {data?.price != null ? data.price.toFixed(sym === "VIX" ? 2 : 0) : "—"}
+                {data?.price != null ? data.price.toFixed(sym === "VIX" ? 2 : 2) : "—"}
               </div>
-              {data && (
+              {data && data.pct != null && (
                 <div style={{ fontSize: 10, color: data.chg >= 0 ? "#00d4aa" : "#ff4d6d", fontFamily: "'IBM Plex Mono', monospace" }}>
                   {data.chg >= 0 ? "+" : ""}{data.pct.toFixed(2)}%
                 </div>
