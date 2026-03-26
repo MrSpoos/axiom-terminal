@@ -116,6 +116,49 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
+// ── DATABENTO LIVE PRICE (futures only) ──────────────────────────────────────
+const DATABENTO_KEY = process.env.DATABENTO_KEY || process.env.DATABENTO_API_KEY;
+const DATABENTO_SYMBOL_MAP = { ES: 'ES.c.0', NQ: 'NQ.c.0', GC: 'GC.c.0', CL: 'CL.c.0' };
+
+async function fetchDatabentoPrice(symbol) {
+  if (!DATABENTO_KEY) throw new Error('DATABENTO_KEY not set');
+  const dbSym = DATABENTO_SYMBOL_MAP[symbol];
+  if (!dbSym) throw new Error(`No Databento mapping for ${symbol}`);
+  const auth = Buffer.from(DATABENTO_KEY + ':').toString('base64');
+  const url = `https://hist.databento.com/v0/timeseries.get_range?dataset=GLBX.MDP3&symbols=${dbSym}&schema=trades&stype_in=continuous&start=-1T&limit=1&encoding=json`;
+  const r = await fetch(url, {
+    headers: { 'Authorization': `Basic ${auth}`, 'Accept': 'application/json' },
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`Databento HTTP ${r.status}: ${body.slice(0, 200)}`);
+  }
+  const text = await r.text();
+  // Databento JSON streaming returns newline-delimited JSON
+  const lines = text.trim().split('\n').filter(Boolean);
+  if (lines.length === 0) throw new Error('No trade data from Databento');
+  const last = JSON.parse(lines[lines.length - 1]);
+  // Price is in fixed-point: divide by 1e9 for MDP3
+  const price = (last.price || last.trade_price || 0) / 1e9;
+  if (price <= 0) throw new Error('Invalid price from Databento');
+  return +price.toFixed(2);
+}
+
+async function getLivePrice(symbol, yahooFallbackSymbol) {
+  // Try Databento first for supported futures
+  if (DATABENTO_SYMBOL_MAP[symbol]) {
+    try {
+      const price = await fetchDatabentoPrice(symbol);
+      return { price, source: 'databento' };
+    } catch (e) {
+      console.warn(`Databento ${symbol} failed, falling back to Yahoo:`, e.message);
+    }
+  }
+  // Fallback to Yahoo
+  const yq = await yahooQuote(yahooFallbackSymbol || symbol);
+  return { price: yq.price, source: 'yahoo', chg: yq.chg, pct: yq.pct, prev: yq.prev, high: yq.high, low: yq.low };
+}
+
 // ── YAHOO FINANCE HELPER ──────────────────────────────────────────────────────
 async function yahooQuote(symbol) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
@@ -151,10 +194,13 @@ const ETF_SYMBOLS = [
 
 app.get('/api/market', async (req, res) => {
   try {
-    const [vixR, esR, nqR, ...etfResults] = await Promise.allSettled([
+    // Futures: try Databento for ES, NQ, GC, CL; VIX always Yahoo
+    const [vixR, esR, nqR, gcR, clR, ...etfResults] = await Promise.allSettled([
       yahooQuote('^VIX'),
-      yahooQuote('ES=F'),
-      yahooQuote('NQ=F'),
+      getLivePrice('ES', 'ES=F'),
+      getLivePrice('NQ', 'NQ=F'),
+      getLivePrice('GC', 'GC=F'),
+      getLivePrice('CL', 'CL=F'),
       ...ETF_SYMBOLS.map(e => yahooQuote(e.yahoo)),
     ]);
 
@@ -166,20 +212,30 @@ app.get('/api/market', async (req, res) => {
         : { price: 0, chg: 0, pct: 0, prev: 0 }),
     }));
 
+    const makeFutures = (sym, result) => {
+      if (result.status !== 'fulfilled') return null;
+      const v = result.value;
+      return { symbol: sym, price: v.price, source: v.source || 'yahoo', chg: v.chg || 0, pct: v.pct || 0, prev: v.prev || 0, high: v.high || null, low: v.low || null };
+    };
+
     const data = {
-      vix:  vixR.status === 'fulfilled' ? { symbol: 'VIX', ...vixR.value } : null,
-      es:   esR.status  === 'fulfilled' ? { symbol: 'ES',  ...esR.value  } : null,
-      nq:   nqR.status  === 'fulfilled' ? { symbol: 'NQ',  ...nqR.value  } : null,
+      vix:  vixR.status === 'fulfilled' ? { symbol: 'VIX', ...vixR.value, source: 'yahoo' } : null,
+      es:   makeFutures('ES', esR),
+      nq:   makeFutures('NQ', nqR),
+      gc:   makeFutures('GC', gcR),
+      cl:   makeFutures('CL', clR),
       etfs,
     };
 
     if (!data.vix && !data.es && !data.nq && etfs.every(e => e.price === 0)) {
-      throw new Error('All Yahoo Finance sources failed');
+      throw new Error('All market data sources failed');
     }
 
     if (vixR.status === 'rejected') console.warn('VIX failed:', vixR.reason?.message);
     if (esR.status  === 'rejected') console.warn('ES failed:',  esR.reason?.message);
     if (nqR.status  === 'rejected') console.warn('NQ failed:',  nqR.reason?.message);
+    if (gcR.status  === 'rejected') console.warn('GC failed:',  gcR.reason?.message);
+    if (clR.status  === 'rejected') console.warn('CL failed:',  clR.reason?.message);
 
     res.json({ success: true, data, ts: new Date().toISOString() });
   } catch (err) {
@@ -1319,7 +1375,21 @@ app.get('/api/autosignal', async (req, res) => {
     const tsD = chartDaily.timestamp || [];
     const qD = chartDaily.indicators?.quote?.[0] || {};
     const meta = chart30m.meta || {};
-    const currentPrice = meta.regularMarketPrice || 0;
+    const yahooPrice = meta.regularMarketPrice || 0;
+
+    // Try Databento for live price (ES/NQ/XAU→GC/OIL→CL), fall back to Yahoo
+    const AUTOSIGNAL_DB_MAP = { ES: 'ES', NQ: 'NQ', XAU: 'GC', OIL: 'CL' };
+    let currentPrice = yahooPrice;
+    let priceSource = 'yahoo';
+    const dbKey = AUTOSIGNAL_DB_MAP[sym];
+    if (dbKey) {
+      try {
+        currentPrice = await fetchDatabentoPrice(dbKey);
+        priceSource = 'databento';
+      } catch (e) {
+        console.warn(`AutoSignal ${sym}: Databento failed, using Yahoo price:`, e.message);
+      }
+    }
 
     // ── Build daily OHLC bars ──
     const dailyBars = [];
@@ -1539,6 +1609,7 @@ app.get('/api/autosignal', async (req, res) => {
     };
     dataUsed.entry_price = preCalc.entry;
     dataUsed.r_value = preCalc.r_value;
+    dataUsed.price_source = priceSource;
 
     // ── Call Claude ──
     const userPrompt = `Analyse this LIVE market data for ${sym} and determine the correct Axiom Edge playbook signal:
@@ -2236,7 +2307,7 @@ app.use((err, req, res, next) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Axiom Backend running on port ${PORT}`);
   console.log(`   /api/news    — Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
-  console.log(`   /api/market  — VIX, ES Futures, NQ Futures (Yahoo Finance)`);
+  console.log(`   /api/market  — VIX, ES, NQ, GC, CL (${DATABENTO_KEY ? 'Databento LIVE' : 'Yahoo delayed'}) + ETFs`);
   console.log(`   /api/macro   — 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
   console.log(`   /api/ai      — Claude streaming proxy (key: ${ANTHROPIC_KEY ? '✓ set' : '✗ MISSING'})`);
   console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
