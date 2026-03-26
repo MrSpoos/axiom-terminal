@@ -659,7 +659,7 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "center" }}>
           {[
             ["VAH", dataUsed.vah], ["VAL", dataUsed.val], ["POC", dataUsed.poc],
-            ["ATR", dataUsed.atr], ["ADR", dataUsed.adr], ["1R", dataUsed.r_value], ["Entry", dataUsed.entry_price], ["Src", dataUsed.price_source === "databento" ? "LIVE" : "DELAYED"],
+            ["ATR", dataUsed.atr], ["ADR", dataUsed.adr], ["1R", dataUsed.r_value], ["Entry", dataUsed.entry_price], ["Src", dataUsed.price_source === "dxfeed" ? "LIVE" : "DELAYED"],
             ["IB Hi", dataUsed.ib_high], ["IB Lo", dataUsed.ib_low], ["IB", dataUsed.ib_status || dataUsed.ib_window],
             ["H4 QP", dataUsed.h4_qp],
             ["Dem\u2194VAH", dataUsed.h4_demand_conterminous ? "\u2713 CTM" : dataUsed.h4_demand_distance_from_vah != null ? `${dataUsed.h4_demand_distance_from_vah}pt` : null],

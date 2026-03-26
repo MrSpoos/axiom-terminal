@@ -116,7 +116,104 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
+// ── dxFeed REAL-TIME via dxLink WebSocket ────────────────────────────────────
+const WebSocket = require('ws');
+const dxCache = {}; // { ES: { price, ts }, NQ: { price, ts }, GC: { price, ts }, CL: { price, ts } }
+const DX_SYMBOL_MAP = { '/ES:XCME': 'ES', '/NQ:XCME': 'NQ', '/GC:XCEC': 'GC', '/CL:XNYM': 'CL' };
+const DX_SUBSCRIBE_SYMBOLS = Object.keys(DX_SYMBOL_MAP);
+
+function connectDxFeed() {
+  const url = process.env.DXFEED_URL;
+  if (!url) { console.warn('dxFeed: DXFEED_URL not set, skipping WebSocket'); return; }
+  let ws;
+  let keepaliveTimer;
+  let firstPriceLogged = false;
+
+  function open() {
+    ws = new WebSocket(url);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'SETUP', channel: 0, keepaliveTimeout: 60, acceptKeepaliveTimeout: 60, version: '0.1' }));
+    });
+    ws.on('message', (raw) => {
+      let msg;
+      try { msg = JSON.parse(raw); } catch { return; }
+      if (msg.type === 'SETUP') {
+        const token = process.env.DXFEED_TOKEN || ((process.env.DXFEED_USERNAME || '') + ':' + (process.env.DXFEED_PASSWORD || ''));
+        ws.send(JSON.stringify({ type: 'AUTH', channel: 0, token }));
+      } else if (msg.type === 'AUTH_STATE' && msg.state === 'AUTHORIZED') {
+        console.log('dxFeed connected ✓');
+        ws.send(JSON.stringify({ type: 'CHANNEL_REQUEST', channel: 1, service: 'FEED', parameters: { contract: 'AUTO' } }));
+        // Start keepalive ping every 30s
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'KEEPALIVE', channel: 0 }));
+        }, 30000);
+      } else if (msg.type === 'CHANNEL_OPENED' && msg.channel === 1) {
+        ws.send(JSON.stringify({
+          type: 'FEED_SUBSCRIPTION', channel: 1,
+          add: DX_SUBSCRIBE_SYMBOLS.map(s => ({ type: 'Quote', symbol: s })),
+        }));
+      } else if (msg.type === 'FEED_DATA' && msg.channel === 1) {
+        parseFeedData(msg.data, firstPriceLogged);
+        if (!firstPriceLogged && Object.keys(dxCache).length > 0) {
+          firstPriceLogged = true;
+          for (const [sym, v] of Object.entries(dxCache)) {
+            console.log(`dxFeed LIVE: ${sym} ${v.price.toFixed(2)}`);
+          }
+        }
+      }
+    });
+    ws.on('close', () => {
+      clearInterval(keepaliveTimer);
+      console.warn('dxFeed disconnected, reconnecting in 5s…');
+      setTimeout(open, 5000);
+    });
+    ws.on('error', (err) => {
+      console.error('dxFeed error:', err.message);
+      ws.close();
+    });
+  }
+  open();
+}
+
+function parseFeedData(data) {
+  if (!Array.isArray(data)) return;
+  // dxLink FEED_DATA format: ["Quote", [fields...], [values...], [values...], ...]
+  // The first element after type is the field names array, followed by value arrays
+  let i = 0;
+  while (i < data.length) {
+    if (data[i] === 'Quote') {
+      i++; // move to fields or first value array
+      // Collect all value arrays that follow until next type string or end
+      while (i < data.length && Array.isArray(data[i])) {
+        const arr = data[i];
+        // arr format: [eventSymbol, eventTime, sequence, timeNanoPart, bidTime, bidExchangeCode, bidPrice, bidSize, askTime, askExchangeCode, askPrice, askSize]
+        // We need: arr[0]=symbol, arr[6]=bidPrice, arr[10]=askPrice
+        const symbol = arr[0];
+        const bid = arr[6];
+        const ask = arr[10];
+        const mapped = DX_SYMBOL_MAP[symbol];
+        if (mapped && typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0) {
+          dxCache[mapped] = { price: +((bid + ask) / 2).toFixed(2), ts: Date.now() };
+        }
+        i++;
+      }
+    } else {
+      i++;
+    }
+  }
+}
+
+// Start dxFeed connection on server boot
+connectDxFeed();
+
 async function getLivePrice(symbol, yahooFallbackSymbol) {
+  // Check dxFeed cache first (valid if < 30s old)
+  const cached = dxCache[symbol];
+  if (cached && (Date.now() - cached.ts) < 30000) {
+    return { price: cached.price, source: 'dxfeed' };
+  }
+  // Fallback to Yahoo
   const yq = await yahooQuote(yahooFallbackSymbol || symbol);
   return { price: yq.price, source: 'yahoo', chg: yq.chg, pct: yq.pct, prev: yq.prev, high: yq.high, low: yq.low };
 }
