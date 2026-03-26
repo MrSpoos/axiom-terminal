@@ -116,7 +116,7 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
-// ── DATABENTO LIVE PRICE (futures only) ──────────────────────────────────────
+// ── DATABENTO FUTURES PRICE (hist API — ~15-20min delayed) ───────────────────
 const DATABENTO_KEY = process.env.DATABENTO_KEY || process.env.DATABENTO_API_KEY;
 const DATABENTO_SYMBOL_MAP = { ES: 'ES.c.0', NQ: 'NQ.c.0', GC: 'GC.c.0', CL: 'CL.c.0' };
 
@@ -125,7 +125,9 @@ async function fetchDatabentoPrice(symbol) {
   const dbSym = DATABENTO_SYMBOL_MAP[symbol];
   if (!dbSym) throw new Error(`No Databento mapping for ${symbol}`);
   const auth = Buffer.from(DATABENTO_KEY + ':').toString('base64');
-  const url = `https://hist.databento.com/v0/timeseries.get_range?dataset=GLBX.MDP3&symbols=${dbSym}&schema=trades&stype_in=continuous&start=-1T&limit=1&encoding=json`;
+  // Hist API is delayed ~15-20min. Query from 25min ago, take the last (most recent) trade.
+  const start = new Date(Date.now() - 25 * 60 * 1000).toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+  const url = `https://hist.databento.com/v0/timeseries.get_range?dataset=GLBX.MDP3&symbols=${dbSym}&schema=trades&stype_in=continuous&start=${start}&encoding=json`;
   const r = await fetch(url, {
     headers: { 'Authorization': `Basic ${auth}`, 'Accept': 'application/json' },
   });
@@ -134,22 +136,28 @@ async function fetchDatabentoPrice(symbol) {
     throw new Error(`Databento HTTP ${r.status}: ${body.slice(0, 200)}`);
   }
   const text = await r.text();
-  // Databento JSON streaming returns newline-delimited JSON
+  // Databento returns newline-delimited JSON — last line = most recent trade
   const lines = text.trim().split('\n').filter(Boolean);
-  if (lines.length === 0) throw new Error('No trade data from Databento');
+  if (lines.length === 0) throw new Error('No trade data from Databento (market may be closed)');
   const last = JSON.parse(lines[lines.length - 1]);
-  // Price is in fixed-point: divide by 1e9 for MDP3
-  const price = (last.price || last.trade_price || 0) / 1e9;
-  if (price <= 0) throw new Error('Invalid price from Databento');
-  return +price.toFixed(2);
+  // Price is in fixed-point: divide by 1e9 for GLBX.MDP3
+  const price = (last.price || 0) / 1e9;
+  if (price <= 0) throw new Error(`Invalid Databento price for ${symbol}: ${last.price}`);
+  // Calculate delay from trade timestamp
+  const tradeTs = last.hd?.ts_event ? Number(last.hd.ts_event) / 1e9 : 0; // nanoseconds → seconds
+  const delaySec = tradeTs > 0 ? Math.round((Date.now() / 1000) - tradeTs) : null;
+  if (delaySec != null && delaySec > 0) {
+    console.log(`Databento ${symbol}: ${price.toFixed(2)} (delayed ~${Math.round(delaySec / 60)}min, ${lines.length} trades in window)`);
+  }
+  return { price: +price.toFixed(2), delayMin: delaySec != null ? Math.round(delaySec / 60) : null };
 }
 
 async function getLivePrice(symbol, yahooFallbackSymbol) {
   // Try Databento first for supported futures
   if (DATABENTO_SYMBOL_MAP[symbol]) {
     try {
-      const price = await fetchDatabentoPrice(symbol);
-      return { price, source: 'databento' };
+      const db = await fetchDatabentoPrice(symbol);
+      return { price: db.price, source: 'databento', delayMin: db.delayMin };
     } catch (e) {
       console.warn(`Databento ${symbol} failed, falling back to Yahoo:`, e.message);
     }
@@ -215,7 +223,7 @@ app.get('/api/market', async (req, res) => {
     const makeFutures = (sym, result) => {
       if (result.status !== 'fulfilled') return null;
       const v = result.value;
-      return { symbol: sym, price: v.price, source: v.source || 'yahoo', chg: v.chg || 0, pct: v.pct || 0, prev: v.prev || 0, high: v.high || null, low: v.low || null };
+      return { symbol: sym, price: v.price, source: v.source || 'yahoo', delayMin: v.delayMin || null, chg: v.chg || 0, pct: v.pct || 0, prev: v.prev || 0, high: v.high || null, low: v.low || null };
     };
 
     const data = {
@@ -1377,14 +1385,15 @@ app.get('/api/autosignal', async (req, res) => {
     const meta = chart30m.meta || {};
     const yahooPrice = meta.regularMarketPrice || 0;
 
-    // Try Databento for live price (ES/NQ/XAU→GC/OIL→CL), fall back to Yahoo
+    // Try Databento for price (ES/NQ/XAU→GC/OIL→CL), fall back to Yahoo
     const AUTOSIGNAL_DB_MAP = { ES: 'ES', NQ: 'NQ', XAU: 'GC', OIL: 'CL' };
     let currentPrice = yahooPrice;
     let priceSource = 'yahoo';
     const dbKey = AUTOSIGNAL_DB_MAP[sym];
     if (dbKey) {
       try {
-        currentPrice = await fetchDatabentoPrice(dbKey);
+        const db = await fetchDatabentoPrice(dbKey);
+        currentPrice = db.price;
         priceSource = 'databento';
       } catch (e) {
         console.warn(`AutoSignal ${sym}: Databento failed, using Yahoo price:`, e.message);
