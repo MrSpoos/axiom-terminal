@@ -547,9 +547,9 @@ function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStat
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'IBM Plex Mono', monospace" }}>{sym}</span>
                 {data?.source === "databento" ? (
-                  <span style={{ fontSize: 7, fontWeight: 700, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(0,212,170,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>LIVE</span>
+                  <span style={{ fontSize: 7, fontWeight: 700, color: "#4a9eff", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(74,158,255,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>DB{data.delayMin ? ` ~${data.delayMin}m` : ""}</span>
                 ) : marketStatus === "live" ? (
-                  <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(246,201,14,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>DELAYED</span>
+                  <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(246,201,14,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>YAHOO</span>
                 ) : null}
               </div>
               <div style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>{name}</div>
