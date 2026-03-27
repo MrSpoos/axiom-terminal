@@ -207,6 +207,7 @@ function parseFeedData(data) {
 // Start dxFeed connection on server boot
 connectDxFeed();
 require('./tradovate').connect(dxCache);
+require('./databento').connect(dxCache);
 
 async function getLivePrice(symbol, yahooFallbackSymbol) {
   // Check dxFeed cache first (valid if < 30s old)
