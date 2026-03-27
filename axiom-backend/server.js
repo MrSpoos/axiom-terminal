@@ -2476,7 +2476,7 @@ PB1 Trend Continuation: eligible when open inside/above value, ADR <60%. Trigger
 
 PB2 Gap Fill: eligible when open gaps outside prev day range. Trigger: first 15-min candle closes back inside prev range. Not eligible: strong gap continuation.
 
-PB3 Fade Exhaustion to Value: eligible when open outside value AND (ADR >70% OR price near prev day extreme). Long if below VAL, short if above VAH. Trigger: bullish/bearish engulfing at prev extreme. Targets: VAL→POC→VAH (long) or VAH→POC→VAL (short). Not eligible: ADR <50%.
+PB3 Fade Exhaustion to Value: eligible when ADR consumed >= 70% OR price is within 0.5x ADR of prev day high or low. Open location does not need to be outside value — extreme ADR consumption alone qualifies. Long if price near prev low, short if price near prev high. Trigger: bullish/bearish engulfing candle at or near the extreme. Targets: VAL→POC→VAH (long) or VAH→POC→VAL (short). Not eligible: ADR < 50%.
 
 PB4 Failed Auction: eligible when price has already tested and rejected VAH or VAL. Trigger: re-test with smaller range candle. Not eligible: first test of level.
 
@@ -2485,7 +2485,8 @@ Critical rules:
 2. Every setup must have an invalidation level
 3. All price levels must come from the input — never invent levels
 4. If no setup eligible, return eligible_setups: [] and explain in no_trade_conditions
-5. If ADR near but below 80%, note how many % remain`;
+5. If ADR near but below 80%, note how many % remain
+6. If ADR consumed >= 80%, always evaluate PB3 as at minimum MONITORING status — never return eligible_setups: [] when ADR is exhausted unless price is already back inside the value area.`;
 
 async function runSetupAnalysis(contextObj) {
   if (!ANTHROPIC_KEY) throw new Error('ANTHROPIC_KEY not set');
@@ -2510,7 +2511,8 @@ async function runSetupAnalysis(contextObj) {
     throw new Error(`AI request failed: ${aiRes.status}`);
   }
   const aiData = await aiRes.json();
-  const raw = aiData?.content?.[0]?.text || '{}';
+  let raw = aiData?.content?.[0]?.text || '{}';
+  raw = raw.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
   try {
     return JSON.parse(raw);
   } catch (e) {
