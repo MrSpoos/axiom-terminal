@@ -10,14 +10,14 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Internal base URL for self-calls (scanner → autosignal, autosignal → adr-asr)
+// Internal base URL for self-calls (scanner â autosignal, autosignal â adr-asr)
 function getInternalUrl(req) {
   if (req) return `${req.protocol}://${req.get('host')}`;
   return process.env.BACKEND_URL || `http://localhost:${PORT}`;
 }
 const FRED_KEY = process.env.FRED_API_KEY;
 
-// ── HEALTH ROUTES (before any middleware) ─────────────────────────────────────
+// ââ HEALTH ROUTES (before any middleware) âââââââââââââââââââââââââââââââââââââ
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'axiom-backend' });
 });
@@ -40,7 +40,7 @@ const rss = new RSSParser({
   customFields: { item: ['media:content', 'media:thumbnail'] },
 });
 
-// ── KEYWORD AUTO-TAGGING ───────────────────────────────────────────────────────
+// ââ KEYWORD AUTO-TAGGING âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 function autoTag(text) {
   const t = text.toLowerCase();
   if (/\b(fed|fomc|rate cut|rate hike|inflation|cpi|pce|unemployment|gdp|recession|monetary policy|fiscal|powell|basis point|soft landing|stagflation)\b/.test(t)) return 'MACRO';
@@ -60,7 +60,7 @@ function impactLevel(text) {
   return 'low';
 }
 
-// ── RSS FEEDS ─────────────────────────────────────────────────────────────────
+// ââ RSS FEEDS âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 const RSS_FEEDS = [
   { url: 'https://feeds.reuters.com/reuters/businessNews', source: 'RTR' },
   { url: 'https://www.cnbc.com/id/10000664/device/rss/rss.html', source: 'CNBC' },
@@ -68,7 +68,7 @@ const RSS_FEEDS = [
   { url: 'https://finance.yahoo.com/news/rssindex', source: 'YF' },
 ];
 
-// ── /api/news ─────────────────────────────────────────────────────────────────
+// ââ /api/news âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 app.get('/api/news', async (req, res) => {
   try {
     const settled = await Promise.allSettled(
@@ -116,7 +116,7 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
-// ── dxFeed REAL-TIME via dxLink WebSocket ────────────────────────────────────
+// ââ dxFeed REAL-TIME via dxLink WebSocket ââââââââââââââââââââââââââââââââââââ
 const WebSocket = require('ws');
 const dxCache = {}; // { ES: { price, ts }, NQ: { price, ts }, GC: { price, ts }, CL: { price, ts } }
 const DX_SYMBOL_MAP = { '/ES:XCME': 'ES', '/NQ:XCME': 'NQ', '/GC:XCEC': 'GC', '/CL:XNYM': 'CL' };
@@ -141,7 +141,7 @@ function connectDxFeed() {
         const token = process.env.DXFEED_TOKEN || ((process.env.DXFEED_USERNAME || '') + ':' + (process.env.DXFEED_PASSWORD || ''));
         ws.send(JSON.stringify({ type: 'AUTH', channel: 0, token }));
       } else if (msg.type === 'AUTH_STATE' && msg.state === 'AUTHORIZED') {
-        console.log('dxFeed connected ✓');
+        console.log('dxFeed connected â');
         ws.send(JSON.stringify({ type: 'CHANNEL_REQUEST', channel: 1, service: 'FEED', parameters: { contract: 'AUTO' } }));
         // Start keepalive ping every 30s
         clearInterval(keepaliveTimer);
@@ -165,7 +165,7 @@ function connectDxFeed() {
     });
     ws.on('close', () => {
       clearInterval(keepaliveTimer);
-      console.warn('dxFeed disconnected, reconnecting in 5s…');
+      console.warn('dxFeed disconnected, reconnecting in 5sâ¦');
       setTimeout(open, 5000);
     });
     ws.on('error', (err) => {
@@ -206,8 +206,6 @@ function parseFeedData(data) {
 
 // Start dxFeed connection on server boot
 connectDxFeed();
-require('./tradovate').connect(dxCache);
-require('./databento').connect(dxCache);
 
 async function getLivePrice(symbol, yahooFallbackSymbol) {
   // Check dxFeed cache first (valid if < 30s old)
@@ -220,7 +218,7 @@ async function getLivePrice(symbol, yahooFallbackSymbol) {
   return { price: yq.price, source: 'yahoo', chg: yq.chg, pct: yq.pct, prev: yq.prev, high: yq.high, low: yq.low };
 }
 
-// ── YAHOO FINANCE HELPER ──────────────────────────────────────────────────────
+// ââ YAHOO FINANCE HELPER ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function yahooQuote(symbol) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
   const r = await fetch(url, {
@@ -244,7 +242,7 @@ async function yahooQuote(symbol) {
   };
 }
 
-// ── /api/market — VIX, ES, NQ + ETFs (SPY/QQQ/IWM/GLD/TLT) ──────────────────
+// ââ /api/market â VIX, ES, NQ + ETFs (SPY/QQQ/IWM/GLD/TLT) ââââââââââââââââââ
 const ETF_SYMBOLS = [
   { sym: 'SPY', name: 'S&P 500 ETF',        yahoo: 'SPY'  },
   { sym: 'QQQ', name: 'Nasdaq 100 ETF',     yahoo: 'QQQ'  },
@@ -305,7 +303,7 @@ app.get('/api/market', async (req, res) => {
   }
 });
 
-// ── /api/futures (legacy endpoint — kept for compatibility) ───────────────────
+// ââ /api/futures (legacy endpoint â kept for compatibility) âââââââââââââââââââ
 app.get('/api/futures', async (req, res) => {
   try {
     const [esR, nqR] = await Promise.allSettled([
@@ -322,7 +320,7 @@ app.get('/api/futures', async (req, res) => {
   }
 });
 
-// ── FRED HELPER ───────────────────────────────────────────────────────────────
+// ââ FRED HELPER âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function fredSeries(seriesId) {
   if (!FRED_KEY) return null;
   const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&limit=3&sort_order=desc&api_key=${FRED_KEY}&file_type=json`;
@@ -334,7 +332,7 @@ async function fredSeries(seriesId) {
   return obs;
 }
 
-// ── /api/macro — Full economic indicators ────────────────────────────────────
+// ââ /api/macro â Full economic indicators ââââââââââââââââââââââââââââââââââââ
 // Helper: fetch FRED series and format as macro object
 async function fredMacro(seriesId, name, fmt) {
   const obs = await fredSeries(seriesId);
@@ -350,7 +348,7 @@ async function fredMacro(seriesId, name, fmt) {
   };
 }
 
-// Helper: fetch Yahoo Finance rate (for treasury yields — no API key needed)
+// Helper: fetch Yahoo Finance rate (for treasury yields â no API key needed)
 async function yahooMacro(symbol) {
   const q = await yahooQuote(symbol);
   return {
@@ -365,24 +363,24 @@ app.get('/api/macro', async (req, res) => {
   try {
     const macro = {};
 
-    // All fetches in parallel — each wrapped in try/catch so one failure doesn't kill the rest
+    // All fetches in parallel â each wrapped in try/catch so one failure doesn't kill the rest
     const jobs = [
-      // 10Y Treasury — Yahoo (^TNX) primary, FRED (DGS10) fallback
+      // 10Y Treasury â Yahoo (^TNX) primary, FRED (DGS10) fallback
       (async () => {
         try { macro['10Y Treasury'] = await yahooMacro('^TNX'); }
         catch { try { const m = await fredMacro('DGS10', '10Y'); if (m) macro['10Y Treasury'] = m; } catch (e) { console.warn('10Y failed:', e.message); } }
       })(),
-      // 2Y Treasury — FRED (DGS2) primary, Yahoo (^TYX is 30Y so skip)
+      // 2Y Treasury â FRED (DGS2) primary, Yahoo (^TYX is 30Y so skip)
       (async () => {
         try { const m = await fredMacro('DGS2'); if (m) macro['2Y Treasury'] = m; }
         catch (e) { console.warn('2Y failed:', e.message); }
       })(),
-      // Fed Funds Rate — FRED (FEDFUNDS)
+      // Fed Funds Rate â FRED (FEDFUNDS)
       (async () => {
         try { const m = await fredMacro('FEDFUNDS'); if (m) macro['Fed Funds Rate'] = m; }
         catch (e) { console.warn('Fed Funds failed:', e.message); }
       })(),
-      // CPI YoY — FRED (CPIAUCSL) — value is index, need YoY calc
+      // CPI YoY â FRED (CPIAUCSL) â value is index, need YoY calc
       (async () => {
         try {
           const obs = await fredSeries('CPIAUCSL');
@@ -400,7 +398,7 @@ app.get('/api/macro', async (req, res) => {
           }
         } catch (e) { console.warn('CPI failed:', e.message); }
       })(),
-      // Core PCE — FRED (PCEPILFE)
+      // Core PCE â FRED (PCEPILFE)
       (async () => {
         try {
           const obs = await fredSeries('PCEPILFE');
@@ -416,19 +414,19 @@ app.get('/api/macro', async (req, res) => {
           }
         } catch (e) { console.warn('Core PCE failed:', e.message); }
       })(),
-      // Unemployment — FRED (UNRATE)
+      // Unemployment â FRED (UNRATE)
       (async () => {
         try { const m = await fredMacro('UNRATE'); if (m) macro['Unemployment'] = m; }
         catch (e) { console.warn('Unemployment failed:', e.message); }
       })(),
-      // GDP Growth — FRED (A191RL1Q225SBEA = Real GDP % change)
+      // GDP Growth â FRED (A191RL1Q225SBEA = Real GDP % change)
       (async () => {
         try {
           const m = await fredMacro('A191RL1Q225SBEA', 'GDP', v => `${v.toFixed(1)}%`);
           if (m) macro['GDP Growth (Q4)'] = m;
         } catch (e) { console.warn('GDP failed:', e.message); }
       })(),
-      // ISM Manufacturing — try multiple FRED series (NAPM discontinued, try alternatives)
+      // ISM Manufacturing â try multiple FRED series (NAPM discontinued, try alternatives)
       (async () => {
         const seriesIds = ['NAPM', 'MANEMP', 'AMTMNO'];
         for (const sid of seriesIds) {
@@ -438,8 +436,8 @@ app.get('/api/macro', async (req, res) => {
             if (m) { macro['ISM Manuf.'] = m; return; }
           } catch {}
         }
-        // All failed — show N/A gracefully
-        macro['ISM Manuf.'] = { value: 'N/A', prev: 'N/A', trend: 'neutral', next: '—', live: false };
+        // All failed â show N/A gracefully
+        macro['ISM Manuf.'] = { value: 'N/A', prev: 'N/A', trend: 'neutral', next: 'â', live: false };
       })(),
     ];
 
@@ -452,7 +450,7 @@ app.get('/api/macro', async (req, res) => {
   }
 });
 
-// ── /api/ai — Claude streaming proxy ─────────────────────────────────────────
+// ââ /api/ai â Claude streaming proxy âââââââââââââââââââââââââââââââââââââââââ
 // Keeps the Anthropic key server-side; streams SSE back to the browser.
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 function todayDateStr() {
@@ -468,7 +466,7 @@ app.post('/api/ai', async (req, res) => {
   const { prompt, systemPrompt, maxTokens = 1000 } = req.body;
   if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
-  // SSE headers — forward the raw Anthropic stream to the browser
+  // SSE headers â forward the raw Anthropic stream to the browser
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -498,7 +496,7 @@ app.post('/api/ai', async (req, res) => {
       return res.end();
     }
 
-    // node-fetch v2: response.body is a Node.js Readable stream — pipe it straight through
+    // node-fetch v2: response.body is a Node.js Readable stream â pipe it straight through
     aiRes.body.on('data', chunk => res.write(chunk));
     aiRes.body.on('end', () => res.end());
     aiRes.body.on('error', err => { console.error('AI stream error:', err); res.end(); });
@@ -510,9 +508,9 @@ app.post('/api/ai', async (req, res) => {
   }
 });
 
-// ── /api/signals — Axiom Edge AI Signal Analyser ─────────────────────────────
+// ââ /api/signals â Axiom Edge AI Signal Analyser âââââââââââââââââââââââââââââ
 // Shared system prompt for both /api/signals and /api/autosignal
-const AXIOM_EDGE_SYSTEM = `You are the Axiom Edge signal engine. You evaluate market conditions against 4 specific playbooks in strict order. Each playbook has completely separate criteria, targets, and session rules. NEVER mix criteria between playbooks. Respond ONLY with valid JSON — no markdown, no code fences, no extra text.
+const AXIOM_EDGE_SYSTEM = `You are the Axiom Edge signal engine. You evaluate market conditions against 4 specific playbooks in strict order. Each playbook has completely separate criteria, targets, and session rules. NEVER mix criteria between playbooks. Respond ONLY with valid JSON â no markdown, no code fences, no extra text.
 
 TRADER PROFILE:
 - Instruments: ES, NQ, DAX, Gold (XAU), Oil (CL)
@@ -765,8 +763,8 @@ app.post('/api/signals', async (req, res) => {
       }, null);
       conterminousInfo = `
 CONTERMINOUS CHECK (pre-calculated, tolerance: ${nearVAH?.tolerance ?? 'N/A'} pts):
-- Nearest H4 level to VAH: ${nearVAH ? `${nearVAH.level} (distance: ${nearVAH.distance} pts) → ${nearVAH.conterminous ? 'CONTERMINOUS' : 'NOT conterminous'}` : 'No H4 levels provided'}
-- Nearest H4 level to VAL: ${nearVAL ? `${nearVAL.level} (distance: ${nearVAL.distance} pts) → ${nearVAL.conterminous ? 'CONTERMINOUS' : 'NOT conterminous'}` : 'No H4 levels provided'}
+- Nearest H4 level to VAH: ${nearVAH ? `${nearVAH.level} (distance: ${nearVAH.distance} pts) â ${nearVAH.conterminous ? 'CONTERMINOUS' : 'NOT conterminous'}` : 'No H4 levels provided'}
+- Nearest H4 level to VAL: ${nearVAL ? `${nearVAL.level} (distance: ${nearVAL.distance} pts) â ${nearVAL.conterminous ? 'CONTERMINOUS' : 'NOT conterminous'}` : 'No H4 levels provided'}
 NOTE: Conterminous values are pre-validated. Use directly.`;
     }
   }
@@ -825,7 +823,7 @@ Calculate stop and targets using the ATR value provided.`;
     const aiData = await aiRes.json();
     const text = aiData?.content?.[0]?.text || '';
 
-    // Parse the JSON response — strip markdown fences if present
+    // Parse the JSON response â strip markdown fences if present
     const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
     let signal;
     try {
@@ -842,7 +840,7 @@ Calculate stop and targets using the ATR value provided.`;
   }
 });
 
-// ── /api/analyse-chart — Chart Screenshot Analyser (Vision) ──────────────────
+// ââ /api/analyse-chart â Chart Screenshot Analyser (Vision) ââââââââââââââââââ
 const CHART_ANALYSIS_SYSTEM = `You are an Axiom Edge chart analysis engine. You extract trading levels from chart screenshots. The user will upload a screenshot from any charting platform (TradingView, Deepcharts, Sierra Chart, NinjaTrader, ThinkOrSwim, etc.).
 
 Your job is to identify and extract ALL visible levels from the chart image:
@@ -869,7 +867,7 @@ ALSO DETERMINE:
 - session: What session appears active based on any timestamps/time axis visible
 
 IB windows by instrument:
-- ES/NQ: 9:30-10:30am ET · DAX: 9:00-10:00am CET · Gold: 8:20-9:20am ET · Oil: 9:00-10:00am ET
+- ES/NQ: 9:30-10:30am ET Â· DAX: 9:00-10:00am CET Â· Gold: 8:20-9:20am ET Â· Oil: 9:00-10:00am ET
 
 Look for:
 - Price labels on the Y-axis
@@ -964,7 +962,7 @@ app.post('/api/analyse-chart', async (req, res) => {
   }
 });
 
-// ── /api/autosignal — Fully Automated Axiom Edge Signal Engine ───────────────
+// ââ /api/autosignal â Fully Automated Axiom Edge Signal Engine âââââââââââââââ
 const AUTO_SYMBOL_MAP = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
 const TICK_SIZE = { ES: 0.25, NQ: 0.25, DAX: 0.5, XAU: 0.10, OIL: 0.01 };
 
@@ -981,7 +979,7 @@ async function yahooChart(symbol, interval, range) {
 }
 
 function calcTPOValueArea(bars, tickSize) {
-  // bars = [{ open, high, low, close }] — 30min RTH bars
+  // bars = [{ open, high, low, close }] â 30min RTH bars
   if (!bars || bars.length === 0) return { vah: 0, val: 0, poc: 0 };
   const tpoMap = {};
   for (const bar of bars) {
@@ -1039,7 +1037,7 @@ function calcQuarterlyPivots(qHigh, qLow, qClose) {
   };
 }
 
-// ── CONTERMINOUS CHECK (GAP 3) ───────────────────────────────────────────────
+// ââ CONTERMINOUS CHECK (GAP 3) âââââââââââââââââââââââââââââââââââââââââââââââ
 const TICK_TOLERANCE = { ES: 10, NQ: 10, DAX: 10, XAU: 10, OIL: 10 };
 const TICK_VALUE_MAP = { ES: 0.25, NQ: 0.25, DAX: 1.0, XAU: 0.1, OIL: 0.01 };
 
@@ -1050,7 +1048,7 @@ function isConterminous(h4Level, vaLevel, instrument) {
   return { conterminous: distance <= tol, distance: +distance.toFixed(2), tolerance: +tol.toFixed(2) };
 }
 
-// ── H4 SWING ZONE DETECTION (GAP 2) ─────────────────────────────────────────
+// ââ H4 SWING ZONE DETECTION (GAP 2) âââââââââââââââââââââââââââââââââââââââââ
 function classifyFormation(bars, idx, type) {
   // type = 'supply' or 'demand'
   // Look at 3 bars before and 3 bars after the swing point
@@ -1061,21 +1059,21 @@ function classifyFormation(bars, idx, type) {
   const falling = (b) => b[b.length - 1].close < b[0].open;
 
   if (type === 'supply') {
-    // RBD: rising before, drop after → reversal (strong)
+    // RBD: rising before, drop after â reversal (strong)
     if (rising(before) && falling(after)) return { formation: 'RBD', formation_strength: 'reversal' };
-    // RBR: rising before, rising after → continuation (weak)
+    // RBR: rising before, rising after â continuation (weak)
     if (rising(before) && rising(after)) return { formation: 'RBR', formation_strength: 'continuation' };
   } else {
-    // DBR: falling before, rally after → reversal (strong)
+    // DBR: falling before, rally after â reversal (strong)
     if (falling(before) && rising(after)) return { formation: 'DBR', formation_strength: 'reversal' };
-    // DBD: falling before, falling after → continuation (weak)
+    // DBD: falling before, falling after â continuation (weak)
     if (falling(before) && falling(after)) return { formation: 'DBD', formation_strength: 'continuation' };
   }
   return { formation: 'unknown', formation_strength: 'unknown' };
 }
 
 function detectSwingZones(bars, atr, ibHigh, ibLow) {
-  // bars = [{open, high, low, close}] — H4 bars (RTH only)
+  // bars = [{open, high, low, close}] â H4 bars (RTH only)
   const LB = 3;
   if (!bars || bars.length < LB * 2 + 1) return { supply: [], demand: [] };
 
@@ -1165,7 +1163,7 @@ function detectSwingZones(bars, atr, ibHigh, ibLow) {
     }
   }
 
-  // Cluster nearby zones (within 0.5 ATR) — keep best quality score
+  // Cluster nearby zones (within 0.5 ATR) â keep best quality score
   const cluster = (zones, key) => {
     if (zones.length === 0) return zones;
     const threshold = atr > 0 ? atr * 0.5 : 999999;
@@ -1284,12 +1282,12 @@ function detectM30Pattern(bars, atr) {
   return 'None';
 }
 
-// ── DAY TYPE CLASSIFICATION ───────────────────────────────────────────────────
+// ââ DAY TYPE CLASSIFICATION âââââââââââââââââââââââââââââââââââââââââââââââââââ
 function classifyDayType(todayBars, vah, val, ibHigh, ibLow, adr20, dailyOpen) {
   const unknown = {
     dayType: 'UNKNOWN', confidence: 'LOW', auction_type: 'unknown',
     ib_range_pct: 0, failed_auction: false, sustained_auction: false,
-    playbook_bias: 'UNKNOWN', reasoning: 'IB not yet set — cannot classify day type',
+    playbook_bias: 'UNKNOWN', reasoning: 'IB not yet set â cannot classify day type',
   };
 
   if (!ibHigh || !ibLow || !adr20 || adr20 === 0) return unknown;
@@ -1340,31 +1338,31 @@ function classifyDayType(todayBars, vah, val, ibHigh, ibLow, adr20, dailyOpen) {
     confidence = 'HIGH';
     auction_type = failedAuctionUpside ? 'failed_upside' : 'failed_downside';
     playbook_bias = 'PB3_PB4';
-    reasoning = `Failed auction ${failedAuctionUpside ? 'upside (broke VAH, returned)' : 'downside (broke VAL, returned)'} — countertrend setups dominate`;
+    reasoning = `Failed auction ${failedAuctionUpside ? 'upside (broke VAH, returned)' : 'downside (broke VAL, returned)'} â countertrend setups dominate`;
   } else if (sustainedAuction) {
     dayType = 'TRENDING';
     confidence = 'HIGH';
     auction_type = 'sustained';
     playbook_bias = 'PB1_PB2';
-    reasoning = 'Sustained auction — IB extended, price not returning to VA. Trend continuation plays.';
+    reasoning = 'Sustained auction â IB extended, price not returning to VA. Trend continuation plays.';
   } else if (ibRangePct < 0.35) {
     dayType = 'LIMITED_AUCTION';
     confidence = 'MEDIUM';
     auction_type = 'normal';
     playbook_bias = 'PB3_ONLY';
-    reasoning = `Narrow IB (${(ibRangePct * 100).toFixed(0)}% of ADR) — limited range, reduced opportunity`;
+    reasoning = `Narrow IB (${(ibRangePct * 100).toFixed(0)}% of ADR) â limited range, reduced opportunity`;
   } else if (ibRangePct > 0.65) {
     dayType = 'TRENDING';
     confidence = 'MEDIUM';
     auction_type = 'normal';
     playbook_bias = 'PB1_PB2';
-    reasoning = `Wide IB (${(ibRangePct * 100).toFixed(0)}% of ADR) — likely trending day`;
+    reasoning = `Wide IB (${(ibRangePct * 100).toFixed(0)}% of ADR) â likely trending day`;
   } else {
     dayType = 'NORMAL_VARIATION';
     confidence = 'LOW';
     auction_type = 'normal';
     playbook_bias = 'PB1_PB2';
-    reasoning = `Normal IB range (${(ibRangePct * 100).toFixed(0)}% of ADR) — default with-trend evaluation`;
+    reasoning = `Normal IB range (${(ibRangePct * 100).toFixed(0)}% of ADR) â default with-trend evaluation`;
   }
 
   return {
@@ -1438,7 +1436,7 @@ app.get('/api/autosignal', async (req, res) => {
     const meta = chart30m.meta || {};
     const yahooPrice = meta.regularMarketPrice || 0;
 
-    // Get live price (dxFeed → Yahoo fallback)
+    // Get live price (dxFeed â Yahoo fallback)
     const AUTOSIGNAL_LIVE_MAP = { ES: 'ES', NQ: 'NQ', XAU: 'GC', OIL: 'CL' };
     const liveKey = AUTOSIGNAL_LIVE_MAP[sym];
     let currentPrice = yahooPrice;
@@ -1449,7 +1447,7 @@ app.get('/api/autosignal', async (req, res) => {
       priceSource = live.source;
     }
 
-    // ── Build daily OHLC bars ──
+    // ââ Build daily OHLC bars ââ
     const dailyBars = [];
     for (let i = 0; i < tsD.length; i++) {
       if (qD.open?.[i] != null && qD.high?.[i] != null && qD.low?.[i] != null && qD.close?.[i] != null) {
@@ -1461,7 +1459,7 @@ app.get('/api/autosignal', async (req, res) => {
     const atr14 = calcATR(dailyBars, 14);
     const adr20 = calcATR(dailyBars, 20);
 
-    // ── Quarterly pivots from last completed quarter ──
+    // ââ Quarterly pivots from last completed quarter ââ
     const lastBar = dailyBars[dailyBars.length - 1];
     const lastDate = lastBar ? new Date(lastBar.ts * 1000) : new Date();
     const curQtr = Math.floor(lastDate.getMonth() / 3);
@@ -1479,7 +1477,7 @@ app.get('/api/autosignal', async (req, res) => {
       d1Pivots = calcQuarterlyPivots(qHigh, qLow, qClose);
     }
 
-    // ── Build 30m bars and filter RTH yesterday ──
+    // ââ Build 30m bars and filter RTH yesterday ââ
     const bars30m = [];
     for (let i = 0; i < ts30.length; i++) {
       if (q30.open?.[i] != null && q30.high?.[i] != null && q30.low?.[i] != null && q30.close?.[i] != null) {
@@ -1525,20 +1523,20 @@ app.get('/api/autosignal', async (req, res) => {
       yesterdayRTH.push(...filtered);
     }
 
-    // ── Calculate TPO Value Area ──
+    // ââ Calculate TPO Value Area ââ
     const va = calcTPOValueArea(yesterdayRTH, tick);
 
-    // ── IB High/Low ──
+    // ââ IB High/Low ââ
     let ibHigh = null, ibLow = null;
     if (todayIBBars.length > 0) {
       ibHigh = +Math.max(...todayIBBars.map(b => b.high)).toFixed(2);
       ibLow = +Math.min(...todayIBBars.map(b => b.low)).toFixed(2);
     }
 
-    // ── M30 pattern ──
+    // ââ M30 pattern ââ
     const m30Pattern = detectM30Pattern(todayM30Bars, atr14);
 
-    // ── Context derivation ──
+    // ââ Context derivation ââ
     let vaOpen = 'Inside VA';
     if (currentPrice > va.vah) vaOpen = 'Above VAH';
     else if (currentPrice < va.val) vaOpen = 'Below VAL';
@@ -1560,10 +1558,10 @@ app.get('/api/autosignal', async (req, res) => {
     const ibStatus = getIBStatus(sym);
     const ibWindow = getIBWindow(sym);
 
-    // ── Day type classification ──
+    // ââ Day type classification ââ
     const dayClassification = classifyDayType(todayBars, va.vah, va.val, ibHigh, ibLow, adr20, todayBars[0]?.open || currentPrice);
 
-    // ── H4 zones (GAP 2 + 4) ──
+    // ââ H4 zones (GAP 2 + 4) ââ
     let h4Zones = { supply: [], demand: [] };
     try {
       const h4Bars = await fetchH4Bars(yahooSym);
@@ -1572,10 +1570,10 @@ app.get('/api/autosignal', async (req, res) => {
       h4Zones = getNearestZones(rawZones, currentPrice, 3);
     } catch (e) { console.warn('H4 zones failed:', e.message); }
 
-    // H4 QP = D1 QP (same quarterly pivot values, different timeframe context — GAP 1)
+    // H4 QP = D1 QP (same quarterly pivot values, different timeframe context â GAP 1)
     const h4Pivots = { ...d1Pivots };
 
-    // ── Conterminous checks (GAP 3) ──
+    // ââ Conterminous checks (GAP 3) ââ
     const nearestDemand = h4Zones.demand[0];
     const nearestSupply = h4Zones.supply[0];
     const defaultTol = (TICK_TOLERANCE[sym] || 10) * (TICK_VALUE_MAP[sym] || 0.25);
@@ -1589,7 +1587,7 @@ app.get('/api/autosignal', async (req, res) => {
     if (nearestDemand && !nearestDemand.tradeable) demandConterminous = { ...demandConterminous, conterminous: false };
     if (nearestSupply && !nearestSupply.tradeable) supplyConterminous = { ...supplyConterminous, conterminous: false };
 
-    // ── ADR/ASR levels ──
+    // ââ ADR/ASR levels ââ
     let asrData = null;
     try {
       const asrRes = await fetch(`${getInternalUrl(req)}/api/adr-asr?symbol=${sym}`, { headers: { 'User-Agent': 'AxiomAutoSignal/1.0' } });
@@ -1597,7 +1595,7 @@ app.get('/api/autosignal', async (req, res) => {
       if (asrJson.success) asrData = asrJson;
     } catch (e) { console.warn('ASR fetch failed:', e.message); }
 
-    // ── Data object to return + send to AI ──
+    // ââ Data object to return + send to AI ââ
     const curSess = asrData?.currentSession || 'NY';
     const curSessData = asrData?.sessions?.[curSess] || {};
     const dataUsed = {
@@ -1650,7 +1648,7 @@ app.get('/api/autosignal', async (req, res) => {
       } : null,
     };
 
-    // ── Pre-calculate stops & targets ──
+    // ââ Pre-calculate stops & targets ââ
     const entryPrice = currentPrice;
     const r = Math.round(atr14 * 0.5 * 100) / 100;  // 0.5x ATR14 for intraday default
     const preCalc = {
@@ -1669,7 +1667,7 @@ app.get('/api/autosignal', async (req, res) => {
     dataUsed.r_value = preCalc.r_value;
     dataUsed.price_source = priceSource;
 
-    // ── Call Claude ──
+    // ââ Call Claude ââ
     const userPrompt = `Analyse this LIVE market data for ${sym} and determine the correct Axiom Edge playbook signal:
 
 INSTRUMENT: ${sym}
@@ -1698,9 +1696,9 @@ H4 SUPPLY/DEMAND ZONES (auto-detected from swing highs/lows):
 CONTERMINOUS CHECK (pre-calculated, tolerance: ${dataUsed.conterminous_tolerance} pts):
 - H4 Demand vs VAH: ${dataUsed.h4_demand_conterminous ? 'CONTERMINOUS' : 'NOT conterminous'} (distance: ${dataUsed.h4_demand_distance_from_vah ?? 'N/A'} pts)
 - H4 Supply vs VAL: ${dataUsed.h4_supply_conterminous ? 'CONTERMINOUS' : 'NOT conterminous'} (distance: ${dataUsed.h4_supply_distance_from_val ?? 'N/A'} pts)
-NOTE: Conterminous values are pre-validated mathematically. Use these directly — do not re-evaluate.
+NOTE: Conterminous values are pre-validated mathematically. Use these directly â do not re-evaluate.
 
-INITIAL BALANCE (${dataUsed.ib_window} — ${dataUsed.ib_status}):
+INITIAL BALANCE (${dataUsed.ib_window} â ${dataUsed.ib_status}):
 - IB High: ${dataUsed.ib_high || 'Not yet formed'}
 - IB Low: ${dataUsed.ib_low || 'Not yet formed'}
 - IB Extension: ${dataUsed.ib_extension}
@@ -1775,7 +1773,7 @@ CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r
       return res.json({ success: true, signal: null, data_used: dataUsed, ai_error: 'Invalid AI response', raw: cleaned, ts: new Date().toISOString() });
     }
 
-    // Override stop/target with pre-calculated values — never trust Claude's math
+    // Override stop/target with pre-calculated values â never trust Claude's math
     if (signal && preCalc) {
       if (signal.signal === 'LONG') {
         signal.stop = preCalc.long_stop;
@@ -1800,7 +1798,7 @@ CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r
   }
 });
 
-// ── /api/tpo — TPO Value Area Calculator (yesterday RTH) ─────────────────────
+// ââ /api/tpo â TPO Value Area Calculator (yesterday RTH) âââââââââââââââââââââ
 app.get('/api/tpo', async (req, res) => {
   const instrument = (req.query.instrument || 'ES').toUpperCase();
   const tickerMap = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
@@ -1888,7 +1886,7 @@ app.get('/api/tpo', async (req, res) => {
   }
 });
 
-// ── /api/qp-calculate — D1 Q Point Calculator (swing-based quartile levels) ──
+// ââ /api/qp-calculate â D1 Q Point Calculator (swing-based quartile levels) ââ
 app.get('/api/qp-calculate', async (req, res) => {
   const { instrument } = req.query;
   const tickerMap = { ES: 'ES=F', NQ: 'NQ=F', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
@@ -1997,7 +1995,7 @@ app.get('/api/qp-calculate', async (req, res) => {
   }
 });
 
-// ── /api/h4-zones — H4 Supply/Demand Zone Detection ─────────────────────────
+// ââ /api/h4-zones â H4 Supply/Demand Zone Detection âââââââââââââââââââââââââ
 app.get('/api/h4-zones', async (req, res) => {
   const symbol = req.query.symbol || 'ES=F';
   const currentPrice = parseFloat(req.query.current_price) || 0;
@@ -2015,7 +2013,7 @@ app.get('/api/h4-zones', async (req, res) => {
   }
 });
 
-// ── BLAHTECH ADR/ASR LEVEL CALCULATIONS ──────────────────────────────────────
+// ââ BLAHTECH ADR/ASR LEVEL CALCULATIONS ââââââââââââââââââââââââââââââââââââââ
 // Equity instrument definitions (CQG symbols from Blahtech Levels)
 const EQUITY_TICK_SIZE = { ES: 0.25, NQ: 0.25, YM: 1, FDXM: 1, DAX: 0.5, XAU: 0.10, OIL: 0.01 };
 const EQUITY_YAHOO_MAP = { ES: 'ES=F', NQ: 'NQ=F', YM: 'YM=F', FDXM: '^GDAXI', DAX: '^GDAXI', XAU: 'GC=F', OIL: 'CL=F' };
@@ -2069,7 +2067,7 @@ function computeRangeExhaustion(openPrice, currentHigh, currentLow, rangeTicks, 
   };
 }
 
-// ── /api/adr-asr — Blahtech ADR/ASR Target Levels ───────────────────────────
+// ââ /api/adr-asr â Blahtech ADR/ASR Target Levels âââââââââââââââââââââââââââ
 app.get('/api/adr-asr', async (req, res) => {
   try {
     const sym = (req.query.symbol || 'ES').toUpperCase();
@@ -2134,7 +2132,7 @@ app.get('/api/adr-asr', async (req, res) => {
 
     const dailyExhaustion = computeRangeExhaustion(dailyOpen, todayHigh, todayLow, adrTicks, tickSize);
 
-    // Session ranges — compute ASR per session from intraday bars grouped by session
+    // Session ranges â compute ASR per session from intraday bars grouped by session
     const gmtNow = new Date();
     const gmtHour = gmtNow.getUTCHours();
     const currentSession = getBlahTechSession(gmtHour);
@@ -2213,7 +2211,7 @@ app.get('/api/adr-asr', async (req, res) => {
   }
 });
 
-// ── /api/scanner — Multi-Instrument Scanner ──────────────────────────────────
+// ââ /api/scanner â Multi-Instrument Scanner ââââââââââââââââââââââââââââââââââ
 app.get('/api/scanner', async (req, res) => {
   const instruments = ['ES', 'NQ', 'DAX', 'XAU', 'OIL'];
   const TIMEOUT_MS = 15000;
@@ -2265,7 +2263,7 @@ app.get('/api/scanner', async (req, res) => {
   }
 });
 
-// ── /api/journal — Trade Journal CRUD ─────────────────────────────────────────
+// ââ /api/journal â Trade Journal CRUD âââââââââââââââââââââââââââââââââââââââââ
 const JOURNAL_FILE = path.join(__dirname, 'journal.json');
 
 function readJournal() {
@@ -2354,7 +2352,7 @@ app.delete('/api/journal/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// ── ERROR HANDLER ─────────────────────────────────────────────────────────────
+// ââ ERROR HANDLER âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
   if (!res.headersSent) {
@@ -2363,21 +2361,21 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Axiom Backend running on port ${PORT}`);
-  console.log(`   /api/news    — Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
-  console.log(`   /api/market  — VIX, ES, NQ, GC, CL (dxFeed → Yahoo fallback) + ETFs`);
-  console.log(`   /api/macro   — 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
-  console.log(`   /api/ai      — Claude streaming proxy (key: ${ANTHROPIC_KEY ? '✓ set' : '✗ MISSING'})`);
-  console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
-  console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
-  console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
-  console.log(`   /api/journal     — Trade Journal CRUD`);
-  console.log(`   /api/scanner     — Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
-  console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
-  console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
-  console.log(`   /api/adr-asr     — Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
+  console.log(`\nð Axiom Backend running on port ${PORT}`);
+  console.log(`   /api/news    â Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
+  console.log(`   /api/market  â VIX, ES, NQ, GC, CL (dxFeed â Yahoo fallback) + ETFs`);
+  console.log(`   /api/macro   â 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
+  console.log(`   /api/ai      â Claude streaming proxy (key: ${ANTHROPIC_KEY ? 'â set' : 'â MISSING'})`);
+  console.log(`   /api/signals â Axiom Edge AI Signal Analyser`);
+  console.log(`   /api/autosignal â Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/analyse-chart â Chart Screenshot Analyser (Vision)`);
+  console.log(`   /api/journal     â Trade Journal CRUD`);
+  console.log(`   /api/scanner     â Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/tpo         â TPO Value Area Calculator (yesterday RTH)`);
+  console.log(`   /api/qp-calculate â D1 Q Point Calculator (swing quartiles)`);
+  console.log(`   /api/adr-asr     â Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
   if (!FRED_KEY) {
-    console.log(`\n   ⚠  FRED_API_KEY not set — 2Y Treasury & Fed Funds will use static fallback`);
+    console.log(`\n   â   FRED_API_KEY not set â 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);
   }
   console.log('');
