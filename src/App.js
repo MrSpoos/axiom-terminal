@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import SignalsPanel from "./components/SignalsPanel";
+import SetupMonitor from "./components/SetupMonitor";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
@@ -634,7 +635,7 @@ export default function Terminal() {
           </div>
           <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
           <nav style={{ display: "flex", gap: 2 }}>
-            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
+            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
           </nav>
         </div>
         <Clock />
@@ -655,6 +656,8 @@ export default function Terminal() {
               </Panel>
             </div>
           </div>
+        ) : activeTab === "SETUPS" ? (
+          <SetupMonitor />
         ) : (
           <>
             <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} />
