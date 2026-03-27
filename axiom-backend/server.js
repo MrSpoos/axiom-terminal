@@ -206,6 +206,7 @@ function parseFeedData(data) {
 
 // Start dxFeed connection on server boot
 connectDxFeed();
+require('./tradovate').connect(dxCache);
 
 async function getLivePrice(symbol, yahooFallbackSymbol) {
   // Check dxFeed cache first (valid if < 30s old)
@@ -2380,3 +2381,4 @@ app.listen(PORT, '0.0.0.0', () => {
   }
   console.log('');
 });
+
