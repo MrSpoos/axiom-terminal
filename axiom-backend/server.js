@@ -2465,13 +2465,26 @@ async function fetchInstrumentContext(symbol, ticker) {
   }
   const adrConsumedPct = prevAdr > 0 ? Math.round(((sessionHigh - sessionLow) / prevAdr) * 100) : 0;
 
+  // Gap detection
+  const gapSize = +(todayOpen - prevClose).toFixed(2);
+  const gapType = todayOpen > prevHigh ? 'gap_up' : todayOpen < prevLow ? 'gap_down' : 'no_gap';
+  const gapSizePctAdr = prevAdr > 0 ? +(Math.abs(gapSize) / prevAdr * 100).toFixed(1) : 0;
+
+  // Open vs value area
+  const openVsValue = todayOpen > vah ? 'above_vah' : todayOpen < val ? 'below_val' : 'inside_value';
+
   const dateStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
   return {
     instrument: symbol,
     date: dateStr,
     session: 'RTH',
     prev: { high: +prevHigh.toFixed(2), low: +prevLow.toFixed(2), close: +prevClose.toFixed(2), vah, val, poc: +poc.toFixed(2), adr: prevAdr },
-    today: { open: +todayOpen.toFixed(2), ib_high: null, ib_low: null, adr_consumed_pct: adrConsumedPct, current_price: +currentPrice.toFixed(2), session_high: +sessionHigh.toFixed(2), session_low: +sessionLow.toFixed(2) },
+    today: {
+      open: +todayOpen.toFixed(2), ib_high: null, ib_low: null, adr_consumed_pct: adrConsumedPct,
+      current_price: +currentPrice.toFixed(2), session_high: +sessionHigh.toFixed(2), session_low: +sessionLow.toFixed(2),
+      gap: { type: gapType, size: gapSize, size_pct_adr: gapSizePctAdr },
+      open_vs_value: openVsValue,
+    },
   };
 }
 
@@ -2502,7 +2515,7 @@ Playbook eligibility:
 
 PB1 Trend Continuation: eligible when open inside/above value, ADR <60%. Trigger: 15-min close above IB high (long) or below IB low (short). Not eligible: ADR >80% or open >1 ATR outside value.
 
-PB2 Gap Fill: eligible when open gaps outside prev day range. Trigger: first 15-min candle closes back inside prev range. Not eligible: strong gap continuation.
+PB2 Gap Fill: eligible when today.gap.type is gap_up or gap_down (open outside previous day range entirely). Gap up → short fade back toward prev.high then prev.vah. Gap down → long fade back toward prev.low then prev.val. Trigger: first 15-min RTH candle that closes back inside the previous day range (below prev.high for gap up, above prev.low for gap down). Invalidation: gap extends further — new session high above open (gap up) or new session low below open (gap down). Not eligible: today.gap.type is no_gap.
 
 PB3 Fade Exhaustion to Value: eligible when ADR consumed >= 70% OR price is within 0.5x ADR of prev day high or low. Open location does not need to be outside value — extreme ADR consumption alone qualifies. Long if price near prev low, short if price near prev high. Trigger: bullish/bearish engulfing candle at or near the extreme. Targets: VAL→POC→VAH (long) or VAH→POC→VAL (short). Not eligible: ADR < 50%.
 
