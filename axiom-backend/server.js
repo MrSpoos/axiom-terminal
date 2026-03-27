@@ -2352,7 +2352,199 @@ app.delete('/api/journal/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// ââ ERROR HANDLER âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── /api/setup-monitor — Conditional Setup Monitor ───────────────────────────
+const SETUP_INSTRUMENTS = [
+  { symbol: 'ES', ticker: 'ES=F' },
+  { symbol: 'NQ', ticker: 'NQ=F' },
+  { symbol: 'GC', ticker: 'GC=F' },
+  { symbol: 'CL', ticker: 'CL=F' },
+];
+
+async function fetchInstrumentContext(symbol, ticker) {
+  const now = new Date();
+  const todayMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const yesterdayMidnight = new Date(todayMidnight.getTime() - 86400000);
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+
+  // A) Fetch yesterday's 15-min bars for VA/POC
+  const p1 = Math.floor(yesterdayMidnight.getTime() / 1000);
+  const p2 = Math.floor(todayMidnight.getTime() / 1000);
+  const yesterdayUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${p1}&period2=${p2}&interval=15m`;
+  const yRes = await fetch(yesterdayUrl, { headers });
+  if (!yRes.ok) throw new Error(`Yahoo yesterday ${ticker} HTTP ${yRes.status}`);
+  const yData = await yRes.json();
+  const yChart = yData?.chart?.result?.[0];
+  if (!yChart) throw new Error(`No yesterday chart data for ${ticker}`);
+  const yTs = yChart.timestamp || [];
+  const yQ = yChart.indicators?.quote?.[0] || {};
+
+  // Build volume profile and prev stats
+  const volumeProfile = {};
+  let prevHigh = -Infinity, prevLow = Infinity, prevClose = 0;
+  for (let i = 0; i < yTs.length; i++) {
+    const h = yQ.high?.[i], l = yQ.low?.[i], c = yQ.close?.[i], v = yQ.volume?.[i];
+    if (h == null || l == null || c == null) continue;
+    if (h > prevHigh) prevHigh = h;
+    if (l < prevLow) prevLow = l;
+    prevClose = c;
+    const level = c.toFixed(2);
+    volumeProfile[level] = (volumeProfile[level] || 0) + (v || 0);
+  }
+
+  // POC = highest volume price level
+  const levels = Object.entries(volumeProfile).map(([p, v]) => ({ price: +p, vol: v }));
+  levels.sort((a, b) => b.vol - a.vol);
+  const totalVol = levels.reduce((s, l) => s + l.vol, 0);
+  const poc = levels.length > 0 ? levels[0].price : prevClose;
+
+  // Value Area: accumulate 70% of volume
+  let accumulated = 0;
+  const vaLevels = [];
+  for (const l of levels) {
+    vaLevels.push(l.price);
+    accumulated += l.vol;
+    if (accumulated >= totalVol * 0.7) break;
+  }
+  const vah = vaLevels.length > 0 ? +Math.max(...vaLevels).toFixed(2) : prevHigh;
+  const val = vaLevels.length > 0 ? +Math.min(...vaLevels).toFixed(2) : prevLow;
+  const prevAdr = +(prevHigh - prevLow).toFixed(2);
+
+  // B) Fetch today's 1-min bars
+  const p3 = p2; // today midnight
+  const p4 = Math.floor(now.getTime() / 1000);
+  const todayUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${p3}&period2=${p4}&interval=1m`;
+  const tRes = await fetch(todayUrl, { headers });
+  if (!tRes.ok) throw new Error(`Yahoo today ${ticker} HTTP ${tRes.status}`);
+  const tData = await tRes.json();
+  const tChart = tData?.chart?.result?.[0];
+  const tTs = tChart?.timestamp || [];
+  const tQ = tChart?.indicators?.quote?.[0] || {};
+
+  let todayOpen = null, sessionHigh = -Infinity, sessionLow = Infinity, currentPrice = null;
+  for (let i = 0; i < tTs.length; i++) {
+    const h = tQ.high?.[i], l = tQ.low?.[i], c = tQ.close?.[i];
+    if (h == null || l == null || c == null) continue;
+    if (todayOpen === null) todayOpen = c;
+    if (h > sessionHigh) sessionHigh = h;
+    if (l < sessionLow) sessionLow = l;
+    currentPrice = c;
+  }
+  if (todayOpen === null) {
+    // Pre-market: use yesterday's close
+    todayOpen = prevClose;
+    sessionHigh = prevClose;
+    sessionLow = prevClose;
+    currentPrice = prevClose;
+  }
+  const adrConsumedPct = prevAdr > 0 ? Math.round(((sessionHigh - sessionLow) / prevAdr) * 100) : 0;
+
+  const dateStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
+  return {
+    instrument: symbol,
+    date: dateStr,
+    session: 'RTH',
+    prev: { high: +prevHigh.toFixed(2), low: +prevLow.toFixed(2), close: +prevClose.toFixed(2), vah, val, poc: +poc.toFixed(2), adr: prevAdr },
+    today: { open: +todayOpen.toFixed(2), ib_high: null, ib_low: null, adr_consumed_pct: adrConsumedPct, current_price: +currentPrice.toFixed(2), session_high: +sessionHigh.toFixed(2), session_low: +sessionLow.toFixed(2) },
+  };
+}
+
+const SETUP_MONITOR_SYSTEM = `You are the Axiom Terminal setup monitor. You do NOT issue live buy/sell signals. Your job is to read pre-open market context, identify which Market Stalkers playbooks are structurally eligible, and output precise conditional trigger statements the trader watches for manually.
+
+Respond ONLY with valid JSON — no markdown, no preamble.
+
+Output schema:
+{
+  instrument, timestamp, open_location, day_type_hypothesis,
+  adr_state: { consumed_pct, exhaustion, exhaustion_threshold: 80 },
+  eligible_setups: [{
+    playbook, name, direction, status,
+    context_met: [], context_not_met: [],
+    trigger_condition, targets: [], invalidation, notes
+  }],
+  no_trade_conditions: [],
+  session_bias
+}
+
+open_location values: above_value | inside_value | below_value | above_prev_high | below_prev_low
+day_type values: trend_day_long | trend_day_short | range_day | possible_range_day | rotation_day | gap_and_go | gap_and_fail
+status values: forming | monitoring | triggered | invalidated
+direction values: long | short
+
+Playbook eligibility:
+
+PB1 Trend Continuation: eligible when open inside/above value, ADR <60%. Trigger: 15-min close above IB high (long) or below IB low (short). Not eligible: ADR >80% or open >1 ATR outside value.
+
+PB2 Gap Fill: eligible when open gaps outside prev day range. Trigger: first 15-min candle closes back inside prev range. Not eligible: strong gap continuation.
+
+PB3 Fade Exhaustion to Value: eligible when open outside value AND (ADR >70% OR price near prev day extreme). Long if below VAL, short if above VAH. Trigger: bullish/bearish engulfing at prev extreme. Targets: VAL→POC→VAH (long) or VAH→POC→VAL (short). Not eligible: ADR <50%.
+
+PB4 Failed Auction: eligible when price has already tested and rejected VAH or VAL. Trigger: re-test with smaller range candle. Not eligible: first test of level.
+
+Critical rules:
+1. Never emit a signal — only state the trigger condition to watch for
+2. Every setup must have an invalidation level
+3. All price levels must come from the input — never invent levels
+4. If no setup eligible, return eligible_setups: [] and explain in no_trade_conditions
+5. If ADR near but below 80%, note how many % remain`;
+
+async function runSetupAnalysis(contextObj) {
+  if (!ANTHROPIC_KEY) throw new Error('ANTHROPIC_KEY not set');
+  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1500,
+      temperature: 0,
+      system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${SETUP_MONITOR_SYSTEM}`,
+      messages: [{ role: 'user', content: JSON.stringify(contextObj) }],
+    }),
+  });
+  if (!aiRes.ok) {
+    const errText = await aiRes.text();
+    console.error('Setup monitor AI error:', aiRes.status, errText.slice(0, 300));
+    throw new Error(`AI request failed: ${aiRes.status}`);
+  }
+  const aiData = await aiRes.json();
+  const raw = aiData?.content?.[0]?.text || '{}';
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('Setup monitor JSON parse error:', e.message, raw.slice(0, 200));
+    return { instrument: contextObj.instrument, error: 'AI response not valid JSON', raw: raw.slice(0, 500), eligible_setups: [], no_trade_conditions: ['AI parse error'] };
+  }
+}
+
+app.get('/api/setup-monitor', async (req, res) => {
+  try {
+    const results = await Promise.allSettled(
+      SETUP_INSTRUMENTS.map(async ({ symbol, ticker }) => {
+        const context = await fetchInstrumentContext(symbol, ticker);
+        const analysis = await runSetupAnalysis(context);
+        return { ...analysis, _context: context };
+      })
+    );
+    const output = results.map((r, i) => {
+      if (r.status === 'fulfilled') return r.value;
+      return {
+        instrument: SETUP_INSTRUMENTS[i].symbol,
+        error: r.reason?.message || 'Failed',
+        eligible_setups: [],
+        no_trade_conditions: ['Data fetch failed — check connection'],
+      };
+    });
+    res.json({ setups: output, generated_at: new Date().toISOString() });
+  } catch (err) {
+    console.error('Setup monitor error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
   if (!res.headersSent) {
@@ -2361,19 +2553,20 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\nð Axiom Backend running on port ${PORT}`);
-  console.log(`   /api/news    â Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
-  console.log(`   /api/market  â VIX, ES, NQ, GC, CL (dxFeed â Yahoo fallback) + ETFs`);
-  console.log(`   /api/macro   â 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
-  console.log(`   /api/ai      â Claude streaming proxy (key: ${ANTHROPIC_KEY ? 'â set' : 'â MISSING'})`);
-  console.log(`   /api/signals â Axiom Edge AI Signal Analyser`);
-  console.log(`   /api/autosignal â Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
-  console.log(`   /api/analyse-chart â Chart Screenshot Analyser (Vision)`);
-  console.log(`   /api/journal     â Trade Journal CRUD`);
-  console.log(`   /api/scanner     â Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
-  console.log(`   /api/tpo         â TPO Value Area Calculator (yesterday RTH)`);
-  console.log(`   /api/qp-calculate â D1 Q Point Calculator (swing quartiles)`);
-  console.log(`   /api/adr-asr     â Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
+  console.log(`\n🚀 Axiom Backend running on port ${PORT}`);
+  console.log(`   /api/news    — Reuters, CNBC, MarketWatch, Yahoo Finance RSS`);
+  console.log(`   /api/market  — VIX, ES, NQ, GC, CL (dxFeed → Yahoo fallback) + ETFs`);
+  console.log(`   /api/macro   — 10Y Treasury (Yahoo Finance)${FRED_KEY ? ' + 2Y/FFR (FRED)' : ''}`);
+  console.log(`   /api/ai      — Claude streaming proxy (key: ${ANTHROPIC_KEY ? '✓ set' : '✗ MISSING'})`);
+  console.log(`   /api/signals — Axiom Edge AI Signal Analyser`);
+  console.log(`   /api/autosignal — Axiom Edge Auto Signal (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/analyse-chart — Chart Screenshot Analyser (Vision)`);
+  console.log(`   /api/journal     — Trade Journal CRUD`);
+  console.log(`   /api/scanner     — Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/setup-monitor — Conditional Setup Monitor (ES/NQ/GC/CL)`);
+  console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
+  console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
+  console.log(`   /api/adr-asr     — Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
   if (!FRED_KEY) {
     console.log(`\n   â   FRED_API_KEY not set â 2Y Treasury & Fed Funds will use static fallback`);
     console.log(`      Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html`);
