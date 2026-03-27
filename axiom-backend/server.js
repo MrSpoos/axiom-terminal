@@ -2360,6 +2360,24 @@ const SETUP_INSTRUMENTS = [
   { symbol: 'CL', ticker: 'CL=F' },
 ];
 
+function getRTHWindow(symbol, date) {
+  // date is a Date object at midnight UTC of the session date
+  const month = date.getUTCMonth() + 1; // 1-12
+  const offset = (month >= 3 && month <= 11) ? -4 : -5; // EDT / EST
+  const windows = {
+    ES: { startH: 9, startM: 30, endH: 16, endM: 0 },
+    NQ: { startH: 9, startM: 30, endH: 16, endM: 0 },
+    GC: { startH: 8, startM: 20, endH: 13, endM: 30 },
+    CL: { startH: 9, startM: 0,  endH: 14, endM: 30 },
+  };
+  const w = windows[symbol] || windows.ES;
+  const start = new Date(date);
+  start.setUTCHours(w.startH - offset, w.startM, 0, 0);
+  const end = new Date(date);
+  end.setUTCHours(w.endH - offset, w.endM, 0, 0);
+  return { start, end };
+}
+
 async function fetchInstrumentContext(symbol, ticker) {
   const now = new Date();
   const todayMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -2378,12 +2396,17 @@ async function fetchInstrumentContext(symbol, ticker) {
   const yTs = yChart.timestamp || [];
   const yQ = yChart.indicators?.quote?.[0] || {};
 
-  // Build volume profile and prev stats
+  // Filter to RTH bars only for volume profile
+  const rthWindow = getRTHWindow(symbol, yesterdayMidnight);
+
+  // Build volume profile and prev stats (RTH only)
   const volumeProfile = {};
   let prevHigh = -Infinity, prevLow = Infinity, prevClose = 0;
   for (let i = 0; i < yTs.length; i++) {
     const h = yQ.high?.[i], l = yQ.low?.[i], c = yQ.close?.[i], v = yQ.volume?.[i];
     if (h == null || l == null || c == null) continue;
+    const barTime = new Date(yTs[i] * 1000);
+    if (barTime < rthWindow.start || barTime >= rthWindow.end) continue;
     if (h > prevHigh) prevHigh = h;
     if (l < prevLow) prevLow = l;
     prevClose = c;
@@ -2420,17 +2443,21 @@ async function fetchInstrumentContext(symbol, ticker) {
   const tTs = tChart?.timestamp || [];
   const tQ = tChart?.indicators?.quote?.[0] || {};
 
+  // Filter today's bars to RTH only for open/session stats
+  const todayRTH = getRTHWindow(symbol, todayMidnight);
   let todayOpen = null, sessionHigh = -Infinity, sessionLow = Infinity, currentPrice = null;
   for (let i = 0; i < tTs.length; i++) {
     const h = tQ.high?.[i], l = tQ.low?.[i], c = tQ.close?.[i];
     if (h == null || l == null || c == null) continue;
+    const barTime = new Date(tTs[i] * 1000);
+    if (barTime < todayRTH.start || barTime >= todayRTH.end) continue;
     if (todayOpen === null) todayOpen = c;
     if (h > sessionHigh) sessionHigh = h;
     if (l < sessionLow) sessionLow = l;
     currentPrice = c;
   }
   if (todayOpen === null) {
-    // Pre-market: use yesterday's close
+    // Pre-RTH: use yesterday's close
     todayOpen = prevClose;
     sessionHigh = prevClose;
     sessionLow = prevClose;
