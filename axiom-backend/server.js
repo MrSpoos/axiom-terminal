@@ -2458,7 +2458,8 @@ Output schema:
   adr_state: { consumed_pct, exhaustion, exhaustion_threshold: 80 },
   eligible_setups: [{
     playbook, name, direction, status,
-    context_met: [], context_not_met: [],
+    context_met: [],
+    context_not_met: REQUIRED — always populate this array. List the specific conditions that are NOT yet met for the trigger to fire. This must always contain at least one item — the trigger candle itself has not formed yet so minimum entry is always 'Trigger candle not yet confirmed on current bar'. Other examples: 'IB not yet formed — wait until 10:30 EST', 'ADR exhaustion not yet confirmed — X% remaining to threshold', 'Price has not reached the extreme level yet — watching for test of [level]', 'Volume expansion not yet present on bounce attempt'. Never return an empty context_not_met array.,
     trigger_condition, targets: [], invalidation, notes
   }],
   no_trade_conditions: [],

@@ -129,12 +129,15 @@ function InstrumentPanel({ data }) {
             </span>
           )}
         </div>
-        {data.session_bias && (
-          <span style={{ fontSize: 8, color: data.session_bias === "bullish" ? "#00d4aa" : data.session_bias === "bearish" ? "#ff4d6d" : "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>
-            BIAS: {(data.session_bias || "").toUpperCase()}
-          </span>
-        )}
       </div>
+
+      {/* Session bias */}
+      {data.session_bias && (
+        <div style={{ fontSize: 11, color: "#9CA3AF", fontStyle: "italic", lineHeight: 1.5, marginBottom: 2, whiteSpace: "normal", fontFamily: "'IBM Plex Mono', monospace" }}>
+          <span style={{ color: "#cbd5e1" }}>BIAS: </span>
+          {typeof data.session_bias === "string" ? data.session_bias.charAt(0).toUpperCase() + data.session_bias.slice(1) : data.session_bias}
+        </div>
+      )}
 
       {/* Day type */}
       {data.day_type_hypothesis && (
