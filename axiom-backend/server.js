@@ -2445,7 +2445,10 @@ async function fetchInstrumentContext(symbol, ticker) {
 
   // Filter today's bars to RTH only for open/session stats
   const todayRTH = getRTHWindow(symbol, todayMidnight);
+  const ibEnd = new Date(todayRTH.start.getTime() + 60 * 60 * 1000); // RTH start + 60 min
   let todayOpen = null, sessionHigh = -Infinity, sessionLow = Infinity, currentPrice = null;
+  let ibHigh = -Infinity, ibLow = Infinity;
+  let hasIBBars = false;
   for (let i = 0; i < tTs.length; i++) {
     const h = tQ.high?.[i], l = tQ.low?.[i], c = tQ.close?.[i];
     if (h == null || l == null || c == null) continue;
@@ -2455,6 +2458,12 @@ async function fetchInstrumentContext(symbol, ticker) {
     if (h > sessionHigh) sessionHigh = h;
     if (l < sessionLow) sessionLow = l;
     currentPrice = c;
+    // IB bars: first 60 min of RTH
+    if (barTime >= todayRTH.start && barTime < ibEnd) {
+      hasIBBars = true;
+      if (h > ibHigh) ibHigh = h;
+      if (l < ibLow) ibLow = l;
+    }
   }
   if (todayOpen === null) {
     // Pre-RTH: use yesterday's close
@@ -2463,6 +2472,8 @@ async function fetchInstrumentContext(symbol, ticker) {
     sessionLow = prevClose;
     currentPrice = prevClose;
   }
+  const ibComplete = now >= ibEnd;
+  const ibMinutesRemaining = ibComplete ? 0 : Math.ceil((ibEnd.getTime() - now.getTime()) / 60000);
   const adrConsumedPct = prevAdr > 0 ? Math.round(((sessionHigh - sessionLow) / prevAdr) * 100) : 0;
 
   // Gap detection
@@ -2480,7 +2491,12 @@ async function fetchInstrumentContext(symbol, ticker) {
     session: 'RTH',
     prev: { high: +prevHigh.toFixed(2), low: +prevLow.toFixed(2), close: +prevClose.toFixed(2), vah, val, poc: +poc.toFixed(2), adr: prevAdr },
     today: {
-      open: +todayOpen.toFixed(2), ib_high: null, ib_low: null, adr_consumed_pct: adrConsumedPct,
+      open: +todayOpen.toFixed(2),
+      ib_high: hasIBBars ? +ibHigh.toFixed(2) : null,
+      ib_low: hasIBBars ? +ibLow.toFixed(2) : null,
+      ib_complete: ibComplete,
+      ib_minutes_remaining: ibMinutesRemaining,
+      adr_consumed_pct: adrConsumedPct,
       current_price: +currentPrice.toFixed(2), session_high: +sessionHigh.toFixed(2), session_low: +sessionLow.toFixed(2),
       gap: { type: gapType, size: gapSize, size_pct_adr: gapSizePctAdr },
       open_vs_value: openVsValue,
@@ -2527,7 +2543,8 @@ Critical rules:
 3. All price levels must come from the input — never invent levels
 4. If no setup eligible, return eligible_setups: [] and explain in no_trade_conditions
 5. If ADR near but below 80%, note how many % remain
-6. If ADR consumed >= 80%, always evaluate PB3 as at minimum MONITORING status — never return eligible_setups: [] when ADR is exhausted unless price is already back inside the value area.`;
+6. If ADR consumed >= 80%, always evaluate PB3 as at minimum MONITORING status — never return eligible_setups: [] when ADR is exhausted unless price is already back inside the value area.
+7. If today.ib_complete is false, any setup that references IB high or IB low as a trigger must include in context_not_met: 'IB not yet complete — {ib_minutes_remaining} minutes remaining (completes at RTH open + 60 min)'. PB1 triggers (IB breakout) cannot be FORMING until IB is complete — set to MONITORING only.`;
 
 async function runSetupAnalysis(contextObj) {
   if (!ANTHROPIC_KEY) throw new Error('ANTHROPIC_KEY not set');

@@ -149,6 +149,19 @@ function InstrumentPanel({ data }) {
       {/* ADR bar */}
       <AdrBar pct={adrPct} />
 
+      {/* IB status pill */}
+      {data._context?.today && (
+        data._context.today.ib_complete ? (
+          <span style={{ alignSelf: "flex-start", fontSize: 8, fontWeight: 700, color: "#00d4aa", background: "rgba(0,212,170,0.12)", padding: "2px 6px", borderRadius: 3, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>
+            ✓ IB SET
+          </span>
+        ) : data._context.today.ib_complete === false ? (
+          <span style={{ alignSelf: "flex-start", fontSize: 8, fontWeight: 700, color: "#f6c90e", background: "rgba(246,201,14,0.12)", padding: "2px 6px", borderRadius: 3, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>
+            ⏳ IB FORMING — {data._context.today.ib_minutes_remaining}m remaining
+          </span>
+        ) : null
+      )}
+
       {/* Divider */}
       <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "2px 0" }} />
 
