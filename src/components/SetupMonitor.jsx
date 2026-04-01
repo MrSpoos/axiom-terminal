@@ -35,6 +35,80 @@ function AdrBar({ pct }) {
   );
 }
 
+// ── Conviction helpers ────────────────────────────────────────────────────────
+
+const CONVICTION_STYLES = {
+  "HIGH CONFIRM": { color: "#000000", bg: "#00d4aa",            border: "#00d4aa",            prefix: "⬆⬆" },
+  "CONFIRM":      { color: "#00d4aa", bg: "transparent",        border: "rgba(0,212,170,0.5)", prefix: "⬆"  },
+  "NEUTRAL":      { color: "#64748b", bg: "transparent",        border: "rgba(100,116,139,0.4)", prefix: "—" },
+  "FADE":         { color: "#ff4d6d", bg: "transparent",        border: "rgba(255,77,109,0.5)", prefix: "⬇" },
+  "STRONG FADE":  { color: "#ffffff", bg: "#ff4d6d",            border: "#ff4d6d",            prefix: "⬇⬇" },
+};
+
+const VOTE_STYLE = {
+  CONFIRM: { icon: "✓", color: "#00d4aa" },
+  FADE:    { icon: "✗", color: "#ff4d6d" },
+  NEUTRAL: { icon: "—", color: "#64748b" },
+};
+
+function ConvictionBadge({ conviction }) {
+  if (!conviction) return null;
+  const s = CONVICTION_STYLES[conviction.conviction] || CONVICTION_STYLES["NEUTRAL"];
+  return (
+    <span style={{
+      fontSize: 8, fontWeight: 700,
+      color: s.color, background: s.bg,
+      border: `1px solid ${s.border}`,
+      padding: "1px 5px", borderRadius: 2,
+      fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em",
+      whiteSpace: "nowrap",
+    }}>
+      {s.prefix} {conviction.conviction}
+    </span>
+  );
+}
+
+function ConvictionDetail({ conviction }) {
+  if (!conviction || !conviction.votes || Object.keys(conviction.votes).length === 0) return null;
+  const agents = [
+    { key: "macro",     label: "MACRO"      },
+    { key: "technical", label: "TECHNICAL"  },
+    { key: "orderFlow", label: "ORDER FLOW" },
+  ];
+  const cs = CONVICTION_STYLES[conviction.conviction] || CONVICTION_STYLES["NEUTRAL"];
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 8, color: "#475569", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em", marginBottom: 5 }}>
+        AGENT CONVICTION
+      </div>
+      {/* Vote rows */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {agents.map(({ key, label }) => {
+          const v = conviction.votes[key];
+          if (!v) return null;
+          const vs = VOTE_STYLE[v.vote] || VOTE_STYLE.NEUTRAL;
+          return (
+            <div key={key} style={{ display: "flex", alignItems: "baseline", gap: 5, background: "rgba(0,0,0,0.15)", borderRadius: 3, padding: "3px 6px" }}>
+              <span style={{ fontSize: 7, color: "#334155", fontFamily: "'IBM Plex Mono', monospace", width: 56, flexShrink: 0 }}>{label}</span>
+              <span style={{ fontSize: 9, color: vs.color, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0 }}>{vs.icon}</span>
+              <span style={{ fontSize: 8, color: "#475569", fontFamily: "'IBM Plex Mono', monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {(v.reason || "").slice(0, 65)}
+              </span>
+              <span style={{ fontSize: 8, color: vs.color, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0 }}>{v.confidence}%</span>
+            </div>
+          );
+        })}
+      </div>
+      {/* Summary + label */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+        <span style={{ fontSize: 8, color: "#334155", fontFamily: "'IBM Plex Mono', monospace" }}>{conviction.summary}</span>
+        <span style={{ fontSize: 8, fontWeight: 700, color: cs.color, fontFamily: "'IBM Plex Mono', monospace" }}>{conviction.conviction}</span>
+      </div>
+    </div>
+  );
+}
+
 function SetupCard({ setup }) {
   const [expanded, setExpanded] = useState(false);
   const pb = setup.playbook || "";
@@ -42,23 +116,39 @@ function SetupCard({ setup }) {
   const statusColor = STATUS_COLORS[setup.status] || "#64748b";
   const isTriggered = setup.status === "triggered";
 
+  // STEP 4 — faded-setup visual treatment
+  const cv = setup.conviction;
+  const isFaded = cv?.conviction === "FADE" || cv?.conviction === "STRONG FADE";
+  const cardBorder = isFaded
+    ? "1px solid rgba(255,100,60,0.28)"
+    : "1px solid rgba(255,255,255,0.06)";
+
   return (
     <div
       onClick={() => setExpanded(!expanded)}
-      style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "8px 10px", marginBottom: 6, cursor: "pointer" }}
+      style={{ background: "rgba(255,255,255,0.02)", border: cardBorder, borderRadius: 6, padding: "8px 10px", marginBottom: 6, cursor: "pointer" }}
     >
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+      {/* STEP 1 — Header row with conviction badge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: isFaded ? 3 : 6, flexWrap: "wrap" }}>
         <span style={{ fontSize: 8, fontWeight: 700, color: pbColor, background: `${pbColor}20`, padding: "1px 5px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em" }}>{pb}</span>
         <span style={{ fontSize: 10, fontWeight: 600, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>{setup.name}</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 8, color: statusColor, fontFamily: "'IBM Plex Mono', monospace" }}>
           <span style={{ width: 5, height: 5, borderRadius: "50%", background: statusColor, display: "inline-block", boxShadow: isTriggered ? `0 0 6px ${statusColor}` : "none", animation: isTriggered ? "pulse 1.5s infinite" : "none" }} />
           {formatLabel(setup.status)}
         </span>
+        {/* Conviction badge — between name and direction */}
+        {cv && <ConvictionBadge conviction={cv} />}
         <span style={{ fontSize: 8, fontWeight: 700, color: setup.direction === "long" ? "#00d4aa" : "#ff4d6d", background: setup.direction === "long" ? "rgba(0,212,170,0.12)" : "rgba(255,77,109,0.12)", padding: "1px 5px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", marginLeft: "auto" }}>
           {(setup.direction || "").toUpperCase()}
         </span>
       </div>
+
+      {/* STEP 4 — Fade warning line */}
+      {isFaded && (
+        <div style={{ fontSize: 8, color: "rgba(255,130,60,0.75)", fontFamily: "'IBM Plex Mono', monospace", marginBottom: 5, paddingLeft: 2 }}>
+          ⚠ Agents fade this setup
+        </div>
+      )}
 
       {/* Trigger condition */}
       <div style={{ borderLeft: `2px solid ${statusColor}`, paddingLeft: 8, fontSize: 10, color: "#cbd5e1", fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.5, background: "rgba(0,0,0,0.2)", borderRadius: "0 4px 4px 0", padding: "5px 8px 5px 8px" }}>
@@ -68,6 +158,9 @@ function SetupCard({ setup }) {
       {/* Expanded details */}
       {expanded && (
         <div style={{ marginTop: 8, fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* STEP 2 — Agent conviction detail, above context blocks */}
+          <ConvictionDetail conviction={cv} />
+
           {/* Context met */}
           {setup.context_met?.length > 0 && (
             <div>
@@ -172,9 +265,11 @@ function InstrumentPanel({ data }) {
         </div>
       )}
 
-      {/* Setup cards */}
+      {/* Setup cards — sorted by convictionScore descending (Step 3) */}
       {data.eligible_setups?.length > 0 ? (
-        data.eligible_setups.map((s, i) => <SetupCard key={i} setup={s} />)
+        [...data.eligible_setups]
+          .sort((a, b) => (b.conviction?.convictionScore ?? -99) - (a.conviction?.convictionScore ?? -99))
+          .map((s, i) => <SetupCard key={i} setup={s} />)
       ) : !hasError ? (
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "10px 12px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace", marginBottom: 4 }}>STANDING ASIDE</div>
