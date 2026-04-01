@@ -53,20 +53,16 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const recognitionRef = useRef(null);
   const intervalRef = useRef(null);
 
-  // ElevenLabs TTS — Lily British female voice
+  // ElevenLabs TTS — Lily, British female neural voice
   const speak = useCallback(async (text) => {
     if (!voiceEnabled) return;
     try {
-      if (window.__buddyAudio) {
-        window.__buddyAudio.pause();
-        window.__buddyAudio = null;
-      }
+      if (window.__buddyAudio) { window.__buddyAudio.pause(); window.__buddyAudio = null; }
       setSpeaking(true);
-
       const clean = text
         .replace(/\*\*/g, "")
         .replace(/[▲▼◈●◐◎◉]/g, "")
-        .replace(/PB[1-4]/g, match => match.split("").join(" "))
+        .replace(/PB([1-4])/g, "Playbook $1")
         .trim()
         .substring(0, 1000);
 
@@ -77,12 +73,12 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
       });
 
       if (!response.ok) {
+        // Fallback to browser TTS
         setSpeaking(false);
         const utt = new SpeechSynthesisUtterance(clean);
-        utt.lang = "en-GB";
-        utt.rate = 0.9;
+        utt.lang = "en-GB"; utt.rate = 0.9;
         utt.onend = () => setSpeaking(false);
-        window.speechSynthesis.speak(utt);
+        window.speechSynthesis?.speak(utt);
         return;
       }
 
@@ -93,16 +89,14 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
       audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); window.__buddyAudio = null; };
       audio.onerror = () => { setSpeaking(false); URL.revokeObjectURL(url); };
       audio.play();
-    } catch {
-      setSpeaking(false);
-    }
+    } catch { setSpeaking(false); }
   }, [voiceEnabled]);
 
-  const stopSpeaking = () => {
+  const stopSpeaking = useCallback(() => {
     if (window.__buddyAudio) { window.__buddyAudio.pause(); window.__buddyAudio = null; }
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     setSpeaking(false);
-  };
+  }, []);
 
   const startListening = useCallback(() => {
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) { alert("Voice not supported. Use Chrome."); return; }
@@ -120,7 +114,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     };
     rec.onerror = () => setListening(false);
     recognitionRef.current = rec; rec.start();
-  }, []);
+  }, [stopSpeaking]);
 
   const stopListening = useCallback(() => { recognitionRef.current?.stop(); setListening(false); }, []);
   const toggleListening = useCallback(() => { if (listening) stopListening(); else startListening(); }, [listening, startListening, stopListening]);
@@ -188,7 +182,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           {sessionContext.instrument && <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"rgba(74,158,255,0.12)", border:"1px solid rgba(74,158,255,0.3)", color:"#4a9eff", borderRadius:3, padding:"2px 8px" }}>{sessionContext.instrument}</span>}
-          <button onClick={() => { setVoiceEnabled(v => !v); if(speaking) stopSpeaking(); }} title={voiceEnabled?"Voice on":"Voice off"}
+          <button onClick={() => { setVoiceEnabled(v => !v); if(speaking) stopSpeaking(); }}
             style={{ fontSize:14, background:voiceEnabled?"rgba(0,212,170,0.12)":"rgba(255,255,255,0.04)", border:voiceEnabled?"1px solid rgba(0,212,170,0.3)":"1px solid rgba(255,255,255,0.1)", color:voiceEnabled?"#00d4aa":"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>
             {voiceEnabled ? "🔊" : "🔇"}
           </button>
