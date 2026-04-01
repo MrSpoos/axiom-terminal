@@ -8,6 +8,28 @@ const STARTERS = [
   "Give me your honest read on this session",
 ];
 
+// Pre-load voices at module level — Chrome loads them async, this ensures they're ready
+let _cachedVoice = null;
+function getUKFemaleVoice() {
+  if (_cachedVoice) return _cachedVoice;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  _cachedVoice =
+    voices.find(v => v.name === "Shelley (English (United Kingdom))") ||
+    voices.find(v => v.name === "Google UK English Female") ||
+    voices.find(v => v.name === "Flo (English (United Kingdom))") ||
+    voices.find(v => v.name === "Sandy (English (United Kingdom))") ||
+    voices.find(v => v.lang === "en-GB" && !["Daniel","Reed","Rocko","Grandpa","Grandma","Eddy"].some(n => v.name.includes(n))) ||
+    voices.find(v => v.lang === "en-GB") ||
+    voices[0];
+  return _cachedVoice;
+}
+// Trigger voice loading immediately and cache on change
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  window.speechSynthesis.getVoices(); // trigger load
+  window.speechSynthesis.onvoiceschanged = () => { _cachedVoice = null; getUKFemaleVoice(); };
+}
+
 function isMarketOpen() {
   const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   const d = et.getDay(), mins = et.getHours() * 60 + et.getMinutes();
@@ -61,21 +83,25 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     utt.rate = 0.88;
     utt.pitch = 1.08;
     utt.volume = 1.0;
-    const voices = window.speechSynthesis.getVoices();
-    // UK female voice — James Bond assistant aesthetic
-    const preferred =
-      voices.find(v => v.name === "Shelley (English (United Kingdom))") ||
-      voices.find(v => v.name === "Google UK English Female") ||
-      voices.find(v => v.name === "Flo (English (United Kingdom))") ||
-      voices.find(v => v.name === "Sandy (English (United Kingdom))") ||
-      voices.find(v => v.lang === "en-GB" && !["Daniel","Reed","Rocko","Grandpa","Grandma","Eddy"].some(n => v.name.includes(n))) ||
-      voices.find(v => v.lang === "en-GB") ||
-      voices[0];
-    if (preferred) utt.voice = preferred;
-    utt.onstart = () => setSpeaking(true);
-    utt.onend = () => setSpeaking(false);
-    utt.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utt);
+    // Use pre-cached UK female voice — with 300ms retry if voices not yet loaded
+    const trySpeak = (attempt) => {
+      const voice = getUKFemaleVoice();
+      if (voice) {
+        utt.voice = voice;
+        utt.onstart = () => setSpeaking(true);
+        utt.onend = () => setSpeaking(false);
+        utt.onerror = () => setSpeaking(false);
+        window.speechSynthesis.speak(utt);
+      } else if (attempt < 5) {
+        setTimeout(() => trySpeak(attempt + 1), 200);
+      } else {
+        // Fallback: speak with whatever default voice
+        utt.onstart = () => setSpeaking(true);
+        utt.onend = () => setSpeaking(false);
+        window.speechSynthesis.speak(utt);
+      }
+    };
+    trySpeak(0);
   }, [voiceEnabled]);
 
   const stopSpeaking = () => { if (window.speechSynthesis) window.speechSynthesis.cancel(); setSpeaking(false); };
@@ -196,7 +222,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         </>}
       </div>
       <div style={{ padding:"10px 14px", borderTop:"1px solid rgba(255,255,255,0.06)", background:"#0a0a10", flexShrink:0, display:"flex", gap:8, alignItems:"flex-end" }}>
-        <button onClick={toggleListening} disabled={loading} title={listening?"Tap to stop":"Tap to speak"}
+        <button onClick={toggleListening} disabled={loading}
           style={{ width:40, height:40, borderRadius:"50%", border:"none", cursor:loading?"not-allowed":"pointer", flexShrink:0, background:listening?"rgba(255,77,109,0.9)":speaking?"rgba(0,212,170,0.2)":"rgba(245,158,11,0.12)", color:listening?"#fff":speaking?"#00d4aa":"#f59e0b", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:listening?"0 0 0 3px rgba(255,77,109,0.3),0 0 12px rgba(255,77,109,0.5)":"none", transition:"all 0.2s", animation:listening?"micPulse 1s ease-in-out infinite":"none" }}>
           {listening ? "⏹" : "🎤"}
         </button>
