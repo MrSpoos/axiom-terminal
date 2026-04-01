@@ -13,36 +13,28 @@ function isMarketOpen() {
   const d = et.getDay(), mins = et.getHours() * 60 + et.getMinutes();
   return d >= 1 && d <= 5 && mins >= 570 && mins < 960;
 }
-
 function renderBold(text) {
   return text.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
-    p.startsWith("**") && p.endsWith("**")
-      ? <strong key={i} style={{ color: "#f59e0b" }}>{p.slice(2,-2)}</strong> : p
+    p.startsWith("**") && p.endsWith("**") ? <strong key={i} style={{ color: "#f59e0b" }}>{p.slice(2,-2)}</strong> : p
   );
 }
-
 function BiasChip({ bias }) {
   const c = { bullish:"#00d4aa", bearish:"#ff4d6d", neutral:"#f59e0b" }[bias?.toLowerCase()] || "#94a3b8";
   return <span style={{ fontSize:9, letterSpacing:"0.08em", color:c, background:c+"18", border:`1px solid ${c}44`, borderRadius:3, padding:"2px 6px", textTransform:"uppercase", fontFamily:"'IBM Plex Mono',monospace" }}>{bias||"—"}</span>;
 }
-
 function CtxPill({ label, value, color }) {
   if (!value && value !== 0) return null;
   return <span style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:3, padding:"2px 7px", whiteSpace:"nowrap" }}><span style={{ color:"#475569" }}>{label}</span><span style={{ color:color||"#cbd5e1" }}>{value}</span></span>;
 }
-
 function UserBubble({ msg }) {
   return <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:12 }}><div style={{ maxWidth:"70%" }}><div style={{ background:"#f59e0b", color:"#0a0a0f", borderRadius:"12px 12px 2px 12px", padding:"8px 12px", fontSize:12, fontFamily:"'DM Sans',sans-serif", lineHeight:1.5, fontWeight:500 }}>{msg.content}</div><div style={{ fontSize:9, color:"#334155", textAlign:"right", marginTop:3, fontFamily:"'IBM Plex Mono',monospace" }}>{msg.timestamp}</div></div></div>;
 }
-
 function BuddyBubble({ msg, biasBorder }) {
   return <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ maxWidth:"80%" }}><div style={{ background:"#0d1117", border:"1px solid rgba(255,255,255,0.08)", borderLeft:`2px solid ${biasBorder}`, borderRadius:"2px 12px 12px 12px", padding:"10px 14px", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", color:"#cbd5e1", lineHeight:1.6 }}>{renderBold(msg.content)}</div><div style={{ fontSize:9, color:"#334155", marginTop:3, fontFamily:"'IBM Plex Mono',monospace" }}>◈ BUDDY · {msg.timestamp}</div></div></div>;
 }
-
 function ErrorBubble({ msg }) {
   return <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ maxWidth:"80%", background:"rgba(255,77,109,0.08)", border:"1px solid rgba(255,77,109,0.25)", borderLeft:"2px solid #ff4d6d", borderRadius:"2px 12px 12px 12px", padding:"8px 12px", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", color:"#ff4d6d" }}>{msg.content}</div></div>;
 }
-
 function EmptyState({ onSend }) {
   return <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:20 }}><div style={{ textAlign:"center" }}><div style={{ fontSize:28, marginBottom:8 }}>◈</div><div style={{ fontSize:13, color:"#64748b", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:"0.05em" }}>YOUR TRADING BUDDY IS READY</div><div style={{ fontSize:11, color:"#334155", marginTop:4 }}>Type or tap the mic to speak</div></div><div style={{ display:"flex", flexDirection:"column", gap:8, width:"100%", maxWidth:420 }}>{STARTERS.map((s,i) => <button key={i} onClick={() => onSend(s)} style={{ background:"rgba(245,158,11,0.06)", border:"1px solid rgba(245,158,11,0.2)", borderRadius:8, padding:"10px 16px", color:"#f59e0b", fontSize:12, cursor:"pointer", textAlign:"left" }}>{s}</button>)}</div></div>;
 }
@@ -61,19 +53,24 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const recognitionRef = useRef(null);
   const intervalRef = useRef(null);
 
-  // Speech synthesis — speak buddy replies through AirPods
   const speak = useCallback((text) => {
     if (!voiceEnabled || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    // Strip markdown bold markers for clean speech
     const clean = text.replace(/\*\*/g, "").replace(/[▲▼◈●]/g, "").trim();
     const utt = new SpeechSynthesisUtterance(clean);
-    utt.rate = 0.92;
-    utt.pitch = 1.0;
+    utt.rate = 0.88;
+    utt.pitch = 1.08;
     utt.volume = 1.0;
-    // Pick a natural voice if available
     const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v => v.name.includes("Samantha") || v.name.includes("Daniel") || v.name.includes("Google UK")) || voices[0];
+    // UK female voice — James Bond assistant aesthetic
+    const preferred =
+      voices.find(v => v.name === "Shelley (English (United Kingdom))") ||
+      voices.find(v => v.name === "Google UK English Female") ||
+      voices.find(v => v.name === "Flo (English (United Kingdom))") ||
+      voices.find(v => v.name === "Sandy (English (United Kingdom))") ||
+      voices.find(v => v.lang === "en-GB" && !["Daniel","Reed","Rocko","Grandpa","Grandma","Eddy"].some(n => v.name.includes(n))) ||
+      voices.find(v => v.lang === "en-GB") ||
+      voices[0];
     if (preferred) utt.voice = preferred;
     utt.onstart = () => setSpeaking(true);
     utt.onend = () => setSpeaking(false);
@@ -81,54 +78,28 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     window.speechSynthesis.speak(utt);
   }, [voiceEnabled]);
 
-  // Stop speaking when user taps mic
-  const stopSpeaking = () => {
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    setSpeaking(false);
-  };
+  const stopSpeaking = () => { if (window.speechSynthesis) window.speechSynthesis.cancel(); setSpeaking(false); };
 
-  // Web Speech API — mic input
   const startListening = useCallback(() => {
-    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) {
-      alert("Voice not supported in this browser. Use Chrome.");
-      return;
-    }
+    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) { alert("Voice not supported. Use Chrome."); return; }
     stopSpeaking();
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
-    rec.continuous = false;
-    rec.interimResults = true;
-    rec.lang = "en-US";
+    rec.continuous = false; rec.interimResults = true; rec.lang = "en-US";
     rec.onstart = () => { setListening(true); setTranscript(""); };
-    rec.onresult = (e) => {
-      const t = Array.from(e.results).map(r => r[0].transcript).join("");
-      setTranscript(t);
-      setInput(t);
-    };
+    rec.onresult = (e) => { const t = Array.from(e.results).map(r => r[0].transcript).join(""); setTranscript(t); setInput(t); };
     rec.onend = () => {
-      setListening(false);
-      setTranscript("");
-      // Auto-send if we got something
+      setListening(false); setTranscript("");
       const inputEl = document.querySelector('textarea[placeholder="Ask your trading buddy..."]');
       const val = inputEl?.value?.trim();
-      if (val) {
-        inputEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-      }
+      if (val) inputEl.dispatchEvent(new KeyboardEvent("keydown", { key:"Enter", code:"Enter", bubbles:true }));
     };
     rec.onerror = () => setListening(false);
-    recognitionRef.current = rec;
-    rec.start();
+    recognitionRef.current = rec; rec.start();
   }, []);
 
-  const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    setListening(false);
-  }, []);
-
-  const toggleListening = useCallback(() => {
-    if (listening) stopListening();
-    else startListening();
-  }, [listening, startListening, stopListening]);
+  const stopListening = useCallback(() => { recognitionRef.current?.stop(); setListening(false); }, []);
+  const toggleListening = useCallback(() => { if (listening) stopListening(); else startListening(); }, [listening, startListening, stopListening]);
 
   const fetchContext = useCallback(async () => {
     try {
@@ -144,30 +115,15 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         dayType: syn.dayType || (syn.session_plan ? "Active" : "—"),
         keyLevel: syn.keyLevel || syn.key_level_bull || ctx.vah || "N/A",
         activeSetups: [],
-        vah: ctx.vah || "N/A",
-        val: ctx.val || "N/A",
-        poc: ctx.poc || "N/A",
+        vah: ctx.vah || "N/A", val: ctx.val || "N/A", poc: ctx.poc || "N/A",
         adrConsumed: ctx.adr_upside_capacity_pct ?? "N/A",
-        ibStatus: ctx.ib_status || "N/A",
-        vix: ctx.vix || "N/A",
-        gap: ctx.gap,
+        ibStatus: ctx.ib_status || "N/A", vix: ctx.vix || "N/A", gap: ctx.gap,
       });
     } catch {}
   }, []);
 
-  useEffect(() => {
-    fetchContext();
-    intervalRef.current = setInterval(fetchContext, 60000);
-    return () => clearInterval(intervalRef.current);
-  }, [fetchContext]);
-
-  // Override currentPrice with live ProjectX feed when connected
-  useEffect(() => {
-    if (livePrice != null) {
-      setSessionContext(prev => ({ ...prev, currentPrice: livePrice }));
-    }
-  }, [livePrice]);
-
+  useEffect(() => { fetchContext(); intervalRef.current = setInterval(fetchContext, 60000); return () => clearInterval(intervalRef.current); }, [fetchContext]);
+  useEffect(() => { if (livePrice != null) setSessionContext(prev => ({ ...prev, currentPrice: livePrice })); }, [livePrice]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages, loading]);
 
   const send = useCallback(async (text) => {
@@ -176,12 +132,10 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     setInput("");
     const ts = new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit", hour12:true });
     const newMessages = [...messages, { role:"user", content, timestamp:ts }];
-    setMessages(newMessages);
-    setLoading(true);
+    setMessages(newMessages); setLoading(true);
     try {
       const r = await fetch(`${API_BASE}/api/trading-chat`, {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
+        method:"POST", headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ messages: newMessages.map(m => ({ role:m.role, content:m.content })), sessionContext }),
       });
       const data = await r.json();
@@ -193,10 +147,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     } catch (err) {
       const errTs = new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit", hour12:true });
       setMessages(prev => [...prev, { role:"error", content:err.message, timestamp:errTs }]);
-    } finally {
-      setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
+    } finally { setLoading(false); setTimeout(() => inputRef.current?.focus(), 50); }
   }, [input, loading, messages, sessionContext, speak]);
 
   const handleKeyDown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
@@ -205,8 +156,6 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 120px)", background:"#06060b", borderRadius:8, border:"1px solid rgba(255,255,255,0.06)", overflow:"hidden" }}>
-
-      {/* HEADER */}
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 16px", borderBottom:"1px solid rgba(255,255,255,0.06)", background:"#0a0a10", flexShrink:0 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <span style={{ fontSize:14, color:"#f59e0b", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:"0.08em", fontWeight:600 }}>◈ TRADING BUDDY</span>
@@ -215,9 +164,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           {sessionContext.instrument && <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"rgba(74,158,255,0.12)", border:"1px solid rgba(74,158,255,0.3)", color:"#4a9eff", borderRadius:3, padding:"2px 8px" }}>{sessionContext.instrument}</span>}
-          {/* Voice toggle */}
-          <button onClick={() => { setVoiceEnabled(v => !v); if(speaking) stopSpeaking(); }}
-            title={voiceEnabled ? "Voice on — click to mute" : "Voice off — click to unmute"}
+          <button onClick={() => { setVoiceEnabled(v => !v); if(speaking) stopSpeaking(); }} title={voiceEnabled?"Voice on":"Voice off"}
             style={{ fontSize:14, background:voiceEnabled?"rgba(0,212,170,0.12)":"rgba(255,255,255,0.04)", border:voiceEnabled?"1px solid rgba(0,212,170,0.3)":"1px solid rgba(255,255,255,0.1)", color:voiceEnabled?"#00d4aa":"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>
             {voiceEnabled ? "🔊" : "🔇"}
           </button>
@@ -225,15 +172,13 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
           <button onClick={() => { setMessages([]); stopSpeaking(); }} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"transparent", border:"1px solid rgba(255,255,255,0.1)", color:"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>CLEAR</button>
         </div>
       </div>
-
-      {/* CONTEXT PILLS */}
       <div style={{ display:"flex", flexWrap:"wrap", gap:5, padding:"8px 14px", borderBottom:"1px solid rgba(255,255,255,0.05)", background:"#080810", flexShrink:0 }}>
         <BiasChip bias={sessionContext.sessionBias} />
         <CtxPill label="DAY" value={sessionContext.dayType} />
         <CtxPill label="PRICE" value={sessionContext.currentPrice} color="#e2e8f0" />
         {pxConnected
-          ? <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: "#00d4aa", background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.25)", borderRadius: 3, padding: "2px 6px" }}>LIVE</span>
-          : <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: "#f59e0b", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 3, padding: "2px 6px" }}>DELAYED</span>
+          ? <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#00d4aa", background:"rgba(0,212,170,0.1)", border:"1px solid rgba(0,212,170,0.25)", borderRadius:3, padding:"2px 6px" }}>LIVE</span>
+          : <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#f59e0b", background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.2)", borderRadius:3, padding:"2px 6px" }}>DELAYED</span>
         }
         <CtxPill label="VAH" value={sessionContext.vah} color="#4a9eff" />
         <CtxPill label="POC" value={sessionContext.poc} color="#a78bfa" />
@@ -243,61 +188,30 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         <CtxPill label="VIX" value={sessionContext.vix} color={sessionContext.vix>20?"#ff4d6d":"#94a3b8"} />
         {sessionContext.gap!=null && <CtxPill label="GAP" value={sessionContext.gap>0?`+${sessionContext.gap}`:sessionContext.gap} color={sessionContext.gap>0?"#00d4aa":"#ff4d6d"} />}
       </div>
-
-      {/* CHAT AREA */}
       <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 8px", display:"flex", flexDirection:"column" }}>
-        {messages.length===0 && !loading
-          ? <EmptyState onSend={send} />
-          : <>{messages.map((msg,i) => msg.role==="user" ? <UserBubble key={i} msg={msg}/> : msg.role==="error" ? <ErrorBubble key={i} msg={msg}/> : <BuddyBubble key={i} msg={msg} biasBorder={biasBorder}/>)}
-            {loading && <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ background:"#0d1117", border:"1px solid rgba(255,255,255,0.08)", borderLeft:`2px solid ${biasBorder}`, borderRadius:"2px 12px 12px 12px", padding:"10px 16px", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", color:"#475569", display:"flex", alignItems:"center", gap:8 }}><span style={{ animation:"buddyPulse 1.2s ease-in-out infinite" }}>●</span><span style={{ animation:"buddyPulse 1.2s ease-in-out infinite 0.2s" }}>●</span><span style={{ animation:"buddyPulse 1.2s ease-in-out infinite 0.4s" }}>●</span></div></div>}
-            <div ref={bottomRef}/>
-          </>
-        }
+        {messages.length===0 && !loading ? <EmptyState onSend={send} /> : <>
+          {messages.map((msg,i) => msg.role==="user" ? <UserBubble key={i} msg={msg}/> : msg.role==="error" ? <ErrorBubble key={i} msg={msg}/> : <BuddyBubble key={i} msg={msg} biasBorder={biasBorder}/>)}
+          {loading && <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ background:"#0d1117", border:"1px solid rgba(255,255,255,0.08)", borderLeft:`2px solid ${biasBorder}`, borderRadius:"2px 12px 12px 12px", padding:"10px 16px", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", color:"#475569", display:"flex", alignItems:"center", gap:8 }}><span style={{ animation:"buddyPulse 1.2s ease-in-out infinite" }}>●</span><span style={{ animation:"buddyPulse 1.2s ease-in-out infinite 0.2s" }}>●</span><span style={{ animation:"buddyPulse 1.2s ease-in-out infinite 0.4s" }}>●</span></div></div>}
+          <div ref={bottomRef}/>
+        </>}
       </div>
-
-      {/* INPUT ROW */}
       <div style={{ padding:"10px 14px", borderTop:"1px solid rgba(255,255,255,0.06)", background:"#0a0a10", flexShrink:0, display:"flex", gap:8, alignItems:"flex-end" }}>
-
-        {/* MIC BUTTON */}
-        <button onClick={toggleListening} disabled={loading}
-          title={listening ? "Tap to stop" : "Tap to speak"}
-          style={{
-            width:40, height:40, borderRadius:"50%", border:"none", cursor:loading?"not-allowed":"pointer", flexShrink:0,
-            background: listening
-              ? "rgba(255,77,109,0.9)"
-              : speaking
-              ? "rgba(0,212,170,0.2)"
-              : "rgba(245,158,11,0.12)",
-            color: listening ? "#fff" : speaking ? "#00d4aa" : "#f59e0b",
-            fontSize:18, display:"flex", alignItems:"center", justifyContent:"center",
-            boxShadow: listening ? "0 0 0 3px rgba(255,77,109,0.3), 0 0 12px rgba(255,77,109,0.5)" : "none",
-            transition:"all 0.2s",
-            animation: listening ? "micPulse 1s ease-in-out infinite" : "none",
-          }}>
+        <button onClick={toggleListening} disabled={loading} title={listening?"Tap to stop":"Tap to speak"}
+          style={{ width:40, height:40, borderRadius:"50%", border:"none", cursor:loading?"not-allowed":"pointer", flexShrink:0, background:listening?"rgba(255,77,109,0.9)":speaking?"rgba(0,212,170,0.2)":"rgba(245,158,11,0.12)", color:listening?"#fff":speaking?"#00d4aa":"#f59e0b", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:listening?"0 0 0 3px rgba(255,77,109,0.3),0 0 12px rgba(255,77,109,0.5)":"none", transition:"all 0.2s", animation:listening?"micPulse 1s ease-in-out infinite":"none" }}>
           {listening ? "⏹" : "🎤"}
         </button>
-
-        {/* TRANSCRIPT / INPUT */}
         <div style={{ flex:1, position:"relative" }}>
-          {listening && transcript && (
-            <div style={{ position:"absolute", bottom:"100%", left:0, right:0, marginBottom:4, background:"#0d1117", border:"1px solid rgba(245,158,11,0.3)", borderRadius:8, padding:"6px 10px", fontSize:11, fontFamily:"'DM Sans',sans-serif", color:"#f59e0b", fontStyle:"italic" }}>
-              {transcript}...
-            </div>
-          )}
-          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-            disabled={loading || listening} placeholder={listening ? "Listening..." : "Ask your trading buddy..."}
-            rows={1}
+          {listening && transcript && <div style={{ position:"absolute", bottom:"100%", left:0, right:0, marginBottom:4, background:"#0d1117", border:"1px solid rgba(245,158,11,0.3)", borderRadius:8, padding:"6px 10px", fontSize:11, color:"#f59e0b", fontStyle:"italic" }}>{transcript}...</div>}
+          <textarea ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown} disabled={loading||listening}
+            placeholder={listening?"Listening...":"Ask your trading buddy..."} rows={1}
             style={{ width:"100%", background:"#0d1117", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"9px 12px", color:"#e2e8f0", fontSize:12, fontFamily:"'DM Sans',sans-serif", resize:"none", outline:"none", lineHeight:1.5, opacity:loading||listening?0.5:1, boxSizing:"border-box" }}
-            onFocus={e => e.target.style.borderColor="rgba(245,158,11,0.4)"} onBlur={e => e.target.style.borderColor="rgba(255,255,255,0.1)"} />
+            onFocus={e=>e.target.style.borderColor="rgba(245,158,11,0.4)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.1)"} />
         </div>
-
-        {/* SEND BUTTON */}
-        <button onClick={() => send()} disabled={loading || !input.trim() || listening}
+        <button onClick={()=>send()} disabled={loading||!input.trim()||listening}
           style={{ background:loading||!input.trim()||listening?"rgba(245,158,11,0.15)":"#f59e0b", border:"none", borderRadius:8, padding:"9px 16px", color:loading||!input.trim()||listening?"#78350f":"#0a0a0f", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", letterSpacing:"0.06em", cursor:loading||!input.trim()||listening?"not-allowed":"pointer", fontWeight:600, whiteSpace:"nowrap" }}>
-          {loading ? "THINKING..." : "▶ SEND"}
+          {loading?"THINKING...":"▶ SEND"}
         </button>
       </div>
-
       <style>{`
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
         @keyframes buddyPulse{0%,100%{opacity:0.2}50%{opacity:0.8}}
@@ -305,4 +219,4 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
       `}</style>
     </div>
   );
-      }
+}
