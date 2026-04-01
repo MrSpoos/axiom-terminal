@@ -3266,7 +3266,7 @@ app.post('/api/projectx/token', async (req, res) => {
     if (!username || !apiKey) {
       return res.status(400).json({ error: 'username and apiKey are required' });
     }
-    const r = await fetch('https://gateway.topstepx.com/api/Auth/loginKey', {
+    const r = await fetch('https://api.topstepx.com/api/Auth/loginKey', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ userName: username, apiKey }),
@@ -3292,7 +3292,7 @@ app.post('/api/projectx/validate', async (req, res) => {
   try {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: 'token is required' });
-    const r = await fetch('https://gateway.topstepx.com/api/Auth/validate', {
+    const r = await fetch('https://api.topstepx.com/api/Auth/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ token }),
