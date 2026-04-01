@@ -8,28 +8,6 @@ const STARTERS = [
   "Give me your honest read on this session",
 ];
 
-// Pre-load voices at module level — Chrome loads them async, this ensures they're ready
-let _cachedVoice = null;
-function getUKFemaleVoice() {
-  if (_cachedVoice) return _cachedVoice;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) return null;
-  _cachedVoice =
-    voices.find(v => v.name === "Shelley (English (United Kingdom))") ||
-    voices.find(v => v.name === "Google UK English Female") ||
-    voices.find(v => v.name === "Flo (English (United Kingdom))") ||
-    voices.find(v => v.name === "Sandy (English (United Kingdom))") ||
-    voices.find(v => v.lang === "en-GB" && !["Daniel","Reed","Rocko","Grandpa","Grandma","Eddy"].some(n => v.name.includes(n))) ||
-    voices.find(v => v.lang === "en-GB") ||
-    voices[0];
-  return _cachedVoice;
-}
-// Trigger voice loading immediately and cache on change
-if (typeof window !== "undefined" && window.speechSynthesis) {
-  window.speechSynthesis.getVoices(); // trigger load
-  window.speechSynthesis.onvoiceschanged = () => { _cachedVoice = null; getUKFemaleVoice(); };
-}
-
 function isMarketOpen() {
   const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   const d = et.getDay(), mins = et.getHours() * 60 + et.getMinutes();
@@ -75,36 +53,56 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const recognitionRef = useRef(null);
   const intervalRef = useRef(null);
 
-  const speak = useCallback((text) => {
-    if (!voiceEnabled || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const clean = text.replace(/\*\*/g, "").replace(/[▲▼◈●]/g, "").trim();
-    const utt = new SpeechSynthesisUtterance(clean);
-    utt.rate = 0.88;
-    utt.pitch = 1.08;
-    utt.volume = 1.0;
-    // Use pre-cached UK female voice — with 300ms retry if voices not yet loaded
-    const trySpeak = (attempt) => {
-      const voice = getUKFemaleVoice();
-      if (voice) {
-        utt.voice = voice;
-        utt.onstart = () => setSpeaking(true);
-        utt.onend = () => setSpeaking(false);
-        utt.onerror = () => setSpeaking(false);
-        window.speechSynthesis.speak(utt);
-      } else if (attempt < 5) {
-        setTimeout(() => trySpeak(attempt + 1), 200);
-      } else {
-        // Fallback: speak with whatever default voice
-        utt.onstart = () => setSpeaking(true);
-        utt.onend = () => setSpeaking(false);
-        window.speechSynthesis.speak(utt);
+  // ElevenLabs TTS — Lily British female voice
+  const speak = useCallback(async (text) => {
+    if (!voiceEnabled) return;
+    try {
+      if (window.__buddyAudio) {
+        window.__buddyAudio.pause();
+        window.__buddyAudio = null;
       }
-    };
-    trySpeak(0);
+      setSpeaking(true);
+
+      const clean = text
+        .replace(/\*\*/g, "")
+        .replace(/[▲▼◈●◐◎◉]/g, "")
+        .replace(/PB[1-4]/g, match => match.split("").join(" "))
+        .trim()
+        .substring(0, 1000);
+
+      const response = await fetch(`${API_BASE}/api/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: clean }),
+      });
+
+      if (!response.ok) {
+        setSpeaking(false);
+        const utt = new SpeechSynthesisUtterance(clean);
+        utt.lang = "en-GB";
+        utt.rate = 0.9;
+        utt.onend = () => setSpeaking(false);
+        window.speechSynthesis.speak(utt);
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      window.__buddyAudio = audio;
+      audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); window.__buddyAudio = null; };
+      audio.onerror = () => { setSpeaking(false); URL.revokeObjectURL(url); };
+      audio.play();
+    } catch {
+      setSpeaking(false);
+    }
   }, [voiceEnabled]);
 
-  const stopSpeaking = () => { if (window.speechSynthesis) window.speechSynthesis.cancel(); setSpeaking(false); };
+  const stopSpeaking = () => {
+    if (window.__buddyAudio) { window.__buddyAudio.pause(); window.__buddyAudio = null; }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    setSpeaking(false);
+  };
 
   const startListening = useCallback(() => {
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) { alert("Voice not supported. Use Chrome."); return; }
