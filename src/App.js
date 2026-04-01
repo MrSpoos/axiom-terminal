@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import SignalsPanel from "./components/SignalsPanel";
 import SetupMonitor from "./components/SetupMonitor";
+import SessionBias from "./components/SessionBias";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
@@ -612,6 +613,12 @@ export default function Terminal() {
   const { market, marketStatus }                   = useLiveMarket();
   const macroLive                                  = useLiveMacro();
   const [activeTab, setActiveTab] = useState("MARKETS");
+  const [pendingJournalEntry, setPendingJournalEntry] = useState(null);
+
+  const handleLogSetup = useCallback((prefill) => {
+    setPendingJournalEntry(prefill);
+    setActiveTab("AXIOM EDGE");
+  }, []);
 
   return (
     <div style={{ minHeight: "100vh", background: "#060a14", backgroundImage: "radial-gradient(ellipse at 20% 20%, rgba(74,158,255,0.04) 0%, transparent 50%), radial-gradient(ellipse at 80% 80%, rgba(0,212,170,0.03) 0%, transparent 50%)", color: "#e2e8f0", fontFamily: "'DM Sans', sans-serif", display: "flex", flexDirection: "column" }}>
@@ -635,7 +642,7 @@ export default function Terminal() {
           </div>
           <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
           <nav style={{ display: "flex", gap: 2 }}>
-            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
+            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS","SESSION BIAS"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
           </nav>
         </div>
         <Clock />
@@ -645,7 +652,7 @@ export default function Terminal() {
         {activeTab === "AXIOM EDGE" ? (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
             <Panel title="Axiom Edge" badge="PB1 · PB2 · PB3 · PB4" style={{ minHeight: 600 }}>
-              <SignalsPanel />
+              <SignalsPanel externalPrefill={pendingJournalEntry} onClearExternalPrefill={() => setPendingJournalEntry(null)} />
             </Panel>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`} style={{ flex: 1 }}>
@@ -657,7 +664,9 @@ export default function Terminal() {
             </div>
           </div>
         ) : activeTab === "SETUPS" ? (
-          <SetupMonitor />
+          <SetupMonitor onLogSetup={handleLogSetup} />
+        ) : activeTab === "SESSION BIAS" ? (
+          <SessionBias />
         ) : (
           <>
             <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} />

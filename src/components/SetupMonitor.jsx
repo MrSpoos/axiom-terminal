@@ -109,7 +109,7 @@ function ConvictionDetail({ conviction }) {
   );
 }
 
-function SetupCard({ setup }) {
+function SetupCard({ setup, onLogSetup, instrument, dayType }) {
   const [expanded, setExpanded] = useState(false);
   const pb = setup.playbook || "";
   const pbColor = PB_COLORS[pb] || "#4a9eff";
@@ -199,13 +199,42 @@ function SetupCard({ setup }) {
               {setup.notes}
             </div>
           )}
+          {/* LOG THIS SETUP button — only when setup is actionable */}
+          {onLogSetup && (setup.status === "forming" || setup.status === "monitoring") && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+              <button
+                onClick={ev => {
+                  ev.stopPropagation();
+                  onLogSetup({
+                    instrument: instrument || "",
+                    playbook: setup.playbook || "",
+                    direction: (setup.direction || "long").toUpperCase(),
+                    day_type: dayType || "",
+                    conviction_label: setup.conviction?.conviction || null,
+                    conviction_score: setup.conviction?.convictionScore ?? null,
+                    conviction_votes: setup.conviction?.votes || null,
+                    notes: [setup.trigger_condition, setup.invalidation ? `Invalidation: ${setup.invalidation}` : ""].filter(Boolean).join("\n"),
+                  });
+                }}
+                style={{
+                  fontSize: 9, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace",
+                  padding: "3px 10px", borderRadius: 3, cursor: "pointer",
+                  background: "rgba(74,158,255,0.08)",
+                  border: "1px solid rgba(74,158,255,0.22)",
+                  color: "#4a9eff", letterSpacing: "0.04em",
+                }}
+              >
+                📋 LOG THIS SETUP
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function InstrumentPanel({ data }) {
+function InstrumentPanel({ data, onLogSetup }) {
   const hasError = !!data.error && !data.eligible_setups?.length;
   const openLoc = OPEN_LOC_COLORS[data.open_location] || { color: "#64748b", bg: "rgba(100,116,139,0.12)" };
   const adrPct = data.adr_state?.consumed_pct ?? data._context?.today?.adr_consumed_pct ?? 0;
@@ -269,7 +298,7 @@ function InstrumentPanel({ data }) {
       {data.eligible_setups?.length > 0 ? (
         [...data.eligible_setups]
           .sort((a, b) => (b.conviction?.convictionScore ?? -99) - (a.conviction?.convictionScore ?? -99))
-          .map((s, i) => <SetupCard key={i} setup={s} />)
+          .map((s, i) => <SetupCard key={i} setup={s} onLogSetup={onLogSetup} instrument={data.instrument} dayType={data.day_type_hypothesis} />)
       ) : !hasError ? (
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "10px 12px" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace", marginBottom: 4 }}>STANDING ASIDE</div>
@@ -282,7 +311,7 @@ function InstrumentPanel({ data }) {
   );
 }
 
-export default function SetupMonitor() {
+export default function SetupMonitor({ onLogSetup }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -353,7 +382,7 @@ export default function SetupMonitor() {
       {data?.setups && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
           {data.setups.map((s, i) => (
-            <InstrumentPanel key={s.instrument || i} data={s} />
+            <InstrumentPanel key={s.instrument || i} data={s} onLogSetup={onLogSetup} />
           ))}
         </div>
       )}

@@ -2063,7 +2063,7 @@ function InstrumentScanner() {
 const PLAYBOOK_OPTIONS = ["PB1-A","PB1-B","PB2","PB3-A","PB3-B","PB4-A","PB4-B","PB4-C"];
 const DAY_TYPE_OPTIONS = ["TRENDING","ASYMMETRICAL_NEUTRAL","LIMITED_AUCTION","NORMAL_VARIATION"];
 
-function TradeJournal({ prefill, onClearPrefill }) {
+function TradeJournal({ prefill, onClearPrefill, externalPrefill, onClearExternalPrefill }) {
   const [view, setView] = useState(prefill ? "log" : "list"); // "log" | "list"
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2080,17 +2080,27 @@ function TradeJournal({ prefill, onClearPrefill }) {
     instrument: "ES", playbook: "PB2", direction: "LONG",
     entry_price: "", stop_price: "", target_price: "",
     exit_price: "", day_type: "", notes: "", screenshot: null,
+    // Conviction fields (pre-filled from SetupMonitor, stored with trade)
+    conviction_label: null, conviction_score: null, conviction_votes: null,
   });
 
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  // Apply prefill
+  // Apply prefill (from autosignal LOG button)
   useEffect(() => {
     if (!prefill) return;
     setForm(f => ({ ...f, ...prefill }));
     setView("log");
     if (onClearPrefill) onClearPrefill();
   }, [prefill, onClearPrefill]);
+
+  // Apply external prefill (from SetupMonitor LOG THIS SETUP button)
+  useEffect(() => {
+    if (!externalPrefill) return;
+    setForm(f => ({ ...f, ...externalPrefill }));
+    setView("log");
+    if (onClearExternalPrefill) onClearExternalPrefill();
+  }, [externalPrefill, onClearExternalPrefill]);
 
   // Load entries
   const loadEntries = useCallback(async () => {
@@ -2150,6 +2160,27 @@ function TradeJournal({ prefill, onClearPrefill }) {
     for (const [pb, s] of Object.entries(byPB)) { const r = s.total >= 2 ? s.wins / s.total : 0; if (r > bestRate) { bestRate = r; best = pb; } }
     return best;
   })();
+
+  // Conviction analytics
+  const convictionTracked = closed.filter(e => e.conviction_label);
+  const cvGroups = {
+    confirmed: convictionTracked.filter(e => e.conviction_label === "CONFIRM" || e.conviction_label === "HIGH CONFIRM"),
+    neutral:   convictionTracked.filter(e => e.conviction_label === "NEUTRAL"),
+    faded:     convictionTracked.filter(e => e.conviction_label === "FADE" || e.conviction_label === "STRONG FADE"),
+  };
+  const cvWinRate = (arr) => arr.length === 0 ? null : +((arr.filter(e => e.pnl_r > 0).length / arr.length) * 100).toFixed(0);
+  const confirmedWR = cvWinRate(cvGroups.confirmed);
+  const neutralWR   = cvWinRate(cvGroups.neutral);
+  const fadedWR     = cvWinRate(cvGroups.faded);
+  const verdictCounts = {
+    right:   convictionTracked.filter(e => e.agent_verdict === "AGENTS RIGHT").length,
+    wrong:   convictionTracked.filter(e => e.agent_verdict === "AGENTS WRONG").length,
+    neutral: convictionTracked.filter(e => e.agent_verdict === "NEUTRAL OUTCOME").length,
+  };
+  const agentAccuracy = (verdictCounts.right + verdictCounts.wrong) > 0
+    ? +((verdictCounts.right / (verdictCounts.right + verdictCounts.wrong)) * 100).toFixed(0)
+    : null;
+  const showCvAnalytics = convictionTracked.length >= 5;
 
   // Filter
   const filtered = entries.filter(e => {
@@ -2226,6 +2257,46 @@ function TradeJournal({ prefill, onClearPrefill }) {
             <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, background: "rgba(255,255,255,0.04)", color: avgR > 0 ? "#00d4aa" : "#ff4d6d" }}>Avg: {avgR > 0 ? "+" : ""}{avgR}R</span>
             {bestPB && <span style={{ fontSize: 8, fontFamily: MONO, padding: "2px 6px", borderRadius: 3, background: "rgba(74,158,255,0.08)", color: "#4a9eff" }}>Best: {bestPB}</span>}
           </div>
+          {/* ── Conviction analytics ── */}
+          {showCvAnalytics && (() => {
+            const edgeDiff = confirmedWR != null && fadedWR != null ? confirmedWR - fadedWR : null;
+            const summaryColor = edgeDiff == null ? "#475569" : edgeDiff >= 15 ? "#00d4aa" : edgeDiff > 0 ? "#f6c90e" : "#ff4d6d";
+            const summaryText = edgeDiff == null ? "— Insufficient data"
+              : edgeDiff >= 15 ? `✓ Agents showing edge — confirmed outperforming faded by ${edgeDiff}%`
+              : edgeDiff >= 0 ? `— Insufficient edge signal — continue collecting data`
+              : `⚠ Agents inverse — faded setups outperforming. Review methodology.`;
+            const cvRows = [
+              { label: "CONFIRMED SETUPS", arr: cvGroups.confirmed, wr: confirmedWR, color: "#00d4aa" },
+              { label: "NEUTRAL SETUPS",   arr: cvGroups.neutral,   wr: neutralWR,   color: "#64748b" },
+              { label: "FADED SETUPS",     arr: cvGroups.faded,     wr: fadedWR,     color: "#ff4d6d" },
+            ];
+            return (
+              <div style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 5, padding: "8px 10px", marginTop: 2 }}>
+                <div style={{ fontSize: 7, color: "#475569", fontFamily: MONO, letterSpacing: "0.08em", marginBottom: 2 }}>AGENT ACCURACY</div>
+                <div style={{ fontSize: 7, color: "#334155", fontFamily: MONO, marginBottom: 6 }}>Based on {convictionTracked.length} closed conviction-tracked trades</div>
+                {cvRows.map(({ label, arr, wr, color }) => arr.length === 0 ? null : (
+                  <div key={label} style={{ marginBottom: 5 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                      <span style={{ fontSize: 7, color, fontFamily: MONO, letterSpacing: "0.04em" }}>{label}</span>
+                      <span style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>{arr.length} trades</span>
+                      <span style={{ fontSize: 8, fontWeight: 700, color, fontFamily: MONO }}>{wr != null ? `${wr}%` : "—"}</span>
+                    </div>
+                    <div style={{ height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${wr ?? 0}%`, background: color, borderRadius: 2, transition: "width 0.4s ease" }} />
+                    </div>
+                  </div>
+                ))}
+                <div style={{ fontSize: 8, color: summaryColor, fontFamily: MONO, marginTop: 6, lineHeight: 1.4 }}>{summaryText}</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 5, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 7, color: "#00d4aa", fontFamily: MONO }}>AGENTS RIGHT: {verdictCounts.right}</span>
+                  <span style={{ fontSize: 7, color: "#ff4d6d", fontFamily: MONO }}>AGENTS WRONG: {verdictCounts.wrong}</span>
+                  <span style={{ fontSize: 7, color: "#475569", fontFamily: MONO }}>NEUTRAL: {verdictCounts.neutral}</span>
+                  {agentAccuracy != null && <span style={{ fontSize: 7, fontWeight: 700, color: agentAccuracy >= 55 ? "#00d4aa" : "#f6c90e", fontFamily: MONO }}>ACCURACY: {agentAccuracy}%</span>}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Filter pills */}
           <div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "center" }}>
             {["all", "open", "closed", ...INSTRUMENTS].map(f => (
@@ -2275,7 +2346,7 @@ function TradeJournal({ prefill, onClearPrefill }) {
 }
 
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function SignalsPanel() {
+export default function SignalsPanel({ externalPrefill, onClearExternalPrefill }) {
   const [mode, setMode] = useState("auto");
   const [selectedInstrument, setSelectedInstrument] = useState("ES");
   const [chartData, setChartData] = useState(null);
@@ -2291,6 +2362,11 @@ export default function SignalsPanel() {
     setJournalPrefill(prefill);
     setMode("journal");
   }, []);
+
+  // Switch to journal mode when an external prefill arrives from SetupMonitor
+  useEffect(() => {
+    if (externalPrefill) setMode("journal");
+  }, [externalPrefill]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
@@ -2355,7 +2431,7 @@ export default function SignalsPanel() {
         {mode === "ai" && <AISignalAnalyser chartData={chartData} onZonesLoaded={zoneAlerts.setZones} />}
         {mode === "calc" && <ATRCalculator />}
         {mode === "manual" && <ManualDecisionTree selectedInstrument={selectedInstrument} />}
-        {mode === "journal" && <TradeJournal prefill={journalPrefill} onClearPrefill={() => setJournalPrefill(null)} />}
+        {mode === "journal" && <TradeJournal prefill={journalPrefill} onClearPrefill={() => setJournalPrefill(null)} externalPrefill={externalPrefill} onClearExternalPrefill={onClearExternalPrefill} />}
       </div>
     </div>
   );
