@@ -3258,6 +3258,66 @@ MarketMaker (20% weight): ${JSON.stringify(marketmaker)}`;
   }
 });
 
+// ── TRADING BUDDY ─────────────────────────────────────────────────────────────
+
+const TRADING_BUDDY_SYSTEM = `You are the Axiom Trading Buddy — a sharp, experienced futures trader and desk partner using the Market Stalkers (MS) methodology. You are sitting alongside the trader during their live session.
+
+You have full awareness of:
+- Current session bias and day type classification
+- Active playbook setups (PB1-PB4) and their conviction scores
+- Live price relative to value area (VAH/VAL/POC)
+- ADR consumed, IB status, key levels, VIX
+
+Your role:
+- Be a real-time sounding board for the trader's ideas
+- Answer "if this then that" questions with precise MS methodology logic
+- Give honest opinions when asked — including telling them to stand aside
+- Flag risks the trader may be overlooking
+- Confirm or challenge their read using the session context you have
+- Reference specific levels from the context in your answers
+- Keep responses concise and actionable — this is a live session, not a lecture
+- NEVER give generic advice. Always reference the actual levels, setups, and context from the session data provided
+
+Tone: direct, confident, collegial. Like a senior trader sitting next to you. No fluff. No disclaimers. Real desk talk.
+
+You receive the full session context in every message. Use it.`;
+
+app.post('/api/trading-chat', async (req, res) => {
+  try {
+    const { messages, sessionContext } = req.body;
+
+    const contextBlock = `
+LIVE SESSION CONTEXT (${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} ET):
+Instrument: ${sessionContext.instrument} | Price: ${sessionContext.currentPrice}
+Session Bias: ${sessionContext.sessionBias?.toUpperCase()} | Day Type: ${sessionContext.dayType}
+Gap: ${sessionContext.gap} | VAH: ${sessionContext.vah} | POC: ${sessionContext.poc} | VAL: ${sessionContext.val}
+ADR Consumed: ${sessionContext.adrConsumed}% | IB: ${sessionContext.ibStatus} | VIX: ${sessionContext.vix}
+Key Watch Level: ${sessionContext.keyLevel}
+Active Setups: ${sessionContext.activeSetups?.length
+  ? sessionContext.activeSetups.map(s =>
+      `${s.playbook} ${s.name} (${s.direction?.toUpperCase()}) — ${s.conviction?.conviction || 'unscored'} — Trigger: ${s.trigger_condition}`
+    ).join(' | ')
+  : 'None identified'
+}`.trim();
+
+    const response = await anthropic.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 400,
+      temperature: 0.7,
+      system: TRADING_BUDDY_SYSTEM + '\n\n' + contextBlock,
+      messages: messages,
+    });
+
+    res.json({
+      reply: response.content[0].text,
+      usage: response.usage,
+    });
+  } catch (err) {
+    console.error('Trading chat error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
