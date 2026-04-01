@@ -166,21 +166,22 @@ export default function TradingBuddy() {
       const r = await fetch(`${API_BASE}/api/session-bias?symbol=ES`);
       if (!r.ok) return;
       const data = await r.json();
+      // GET /api/session-bias returns: { context: {...snake_case}, synthesis: {...}, agents: {...} }
       const ctx = data.context || {};
-      const sm = data.setup_monitor || {};
+      const syn = data.synthesis || {};
       setSessionContext({
         instrument:   ctx.instrument || "ES",
-        currentPrice: ctx.currentPrice,
-        sessionBias:  data.synthesis?.bias || "neutral",
-        dayType:      sm.day_type || ctx.dayType || "—",
-        keyLevel:     ctx.keyLevel || ctx.vah || "—",
-        activeSetups: sm.eligible_setups || [],
-        vah:          ctx.vah,
-        val:          ctx.val,
-        poc:          ctx.poc,
-        adrConsumed:  ctx.adrConsumed ?? ctx.adr_consumed,
-        ibStatus:     ctx.ibStatus || ctx.ib_status || "—",
-        vix:          ctx.vix,
+        currentPrice: ctx.current_price,
+        sessionBias:  (syn.composite_bias || "NEUTRAL").toLowerCase(),
+        dayType:      syn.session_plan ? "Active" : "—",
+        keyLevel:     syn.key_level_bull || ctx.vah || "N/A",
+        activeSetups: [],
+        vah:          ctx.vah   || "N/A",
+        val:          ctx.val   || "N/A",
+        poc:          ctx.poc   || "N/A",
+        adrConsumed:  ctx.adr_upside_capacity_pct ?? "N/A",
+        ibStatus:     ctx.ib_status || "N/A",
+        vix:          ctx.vix   || "N/A",
         gap:          ctx.gap,
       });
     } catch {
