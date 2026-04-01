@@ -3275,6 +3275,56 @@ MarketMaker (20% weight): ${JSON.stringify(marketmaker)}`;
   }
 });
 
+// ── ELEVENLABS TTS ────────────────────────────────────────────────────────────
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'No text provided' });
+    if (!process.env.ELEVENLABS_API_KEY) return res.status(500).json({ error: 'ElevenLabs not configured' });
+
+    // Lily — Velvety, confident British female voice
+    const VOICE_ID = 'pFZP5JQG7iQjIQuC4Bku';
+
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          'Accept': 'audio/mpeg',
+        },
+        body: JSON.stringify({
+          text: text.substring(0, 1000),
+          model_id: 'eleven_turbo_v2_5',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.3,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('ElevenLabs error:', err);
+      return res.status(500).json({ error: 'TTS failed', detail: err });
+    }
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    response.body.pipe(res);
+
+  } catch (err) {
+    console.error('TTS error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── PROJECTX / TOPSTEPX AUTH ──────────────────────────────────────────────────
 
 app.post('/api/projectx/token', async (req, res) => {
