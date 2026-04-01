@@ -1446,6 +1446,9 @@ app.get('/api/autosignal', async (req, res) => {
       currentPrice = live.price;
       priceSource = live.source;
     }
+    // ProjectX live price takes highest priority
+    const projectxPrice = req.query.livePrice ? parseFloat(req.query.livePrice) : null;
+    if (projectxPrice) { currentPrice = projectxPrice; priceSource = 'projectx'; }
 
     // ââ Build daily OHLC bars ââ
     const dailyBars = [];
@@ -2215,6 +2218,8 @@ app.get('/api/adr-asr', async (req, res) => {
 app.get('/api/scanner', async (req, res) => {
   const instruments = ['ES', 'NQ', 'DAX', 'XAU', 'OIL'];
   const TIMEOUT_MS = 15000;
+  // Accept live prices forwarded from frontend: ?liveES=5900&liveNQ=21000 etc.
+  const scannerLiveMap = { ES: req.query.liveES, NQ: req.query.liveNQ, GC: req.query.liveGC, CL: req.query.liveCL, XAU: req.query.liveGC, OIL: req.query.liveCL };
 
   const baseUrl = getInternalUrl(req);
 
@@ -2222,7 +2227,8 @@ app.get('/api/scanner', async (req, res) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-      const url = `${baseUrl}/api/autosignal?symbol=${sym}`;
+      const lp = scannerLiveMap[sym];
+      const url = `${baseUrl}/api/autosignal?symbol=${sym}${lp ? `&livePrice=${lp}` : ''}`;
       const r = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'AxiomScanner/1.0' } });
       clearTimeout(timer);
       const d = await r.json();
@@ -2400,7 +2406,7 @@ function getRTHWindow(symbol, date) {
   return { start, end };
 }
 
-async function fetchInstrumentContext(symbol, ticker) {
+async function fetchInstrumentContext(symbol, ticker, livePriceOverride) {
   const now = new Date();
   const todayMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const yesterdayMidnight = new Date(todayMidnight.getTime() - 86400000);
@@ -2494,6 +2500,8 @@ async function fetchInstrumentContext(symbol, ticker) {
     sessionLow = prevClose;
     currentPrice = prevClose;
   }
+  // Override with live price from ProjectX when provided
+  if (livePriceOverride) currentPrice = livePriceOverride;
   const ibComplete = now >= ibEnd;
   const ibMinutesRemaining = ibComplete ? 0 : Math.ceil((ibEnd.getTime() - now.getTime()) / 60000);
   const adrConsumedPct = prevAdr > 0 ? Math.round(((sessionHigh - sessionLow) / prevAdr) * 100) : 0;
@@ -2685,10 +2693,17 @@ async function runSetupAnalysis(contextObj) {
 }
 
 app.get('/api/setup-monitor', async (req, res) => {
+  // Accept per-instrument live prices from ProjectX: ?liveES=5900&liveNQ=21000 etc.
+  const livePriceMap = {
+    ES: req.query.liveES ? parseFloat(req.query.liveES) : null,
+    NQ: req.query.liveNQ ? parseFloat(req.query.liveNQ) : null,
+    GC: req.query.liveGC ? parseFloat(req.query.liveGC) : null,
+    CL: req.query.liveCL ? parseFloat(req.query.liveCL) : null,
+  };
   try {
     const results = await Promise.allSettled(
       SETUP_INSTRUMENTS.map(async ({ symbol, ticker }) => {
-        const context = await fetchInstrumentContext(symbol, ticker);
+        const context = await fetchInstrumentContext(symbol, ticker, livePriceMap[symbol] || null);
         const analysis = await runSetupAnalysis(context);
         const withContext = { ...analysis, _context: context };
 
@@ -2882,6 +2897,7 @@ app.get('/api/session-bias', async (req, res) => {
   const yahooSym = AUTO_SYMBOL_MAP[sym];
   if (!yahooSym) return res.status(400).json({ error: `Unknown symbol: ${sym}. Use ES/NQ/DAX/XAU/OIL` });
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
+  const sbLivePrice = req.query.livePrice ? parseFloat(req.query.livePrice) : null;
 
   const tick = TICK_SIZE[sym] || 0.25;
 
@@ -2895,7 +2911,8 @@ app.get('/api/session-bias', async (req, res) => {
     ]);
 
     const meta = chart30m.meta || {};
-    const currentPrice = liveData.price || meta.regularMarketPrice || 0;
+    const currentPrice = sbLivePrice || liveData.price || meta.regularMarketPrice || 0;
+    const sbPriceSource = sbLivePrice ? 'projectx' : (liveData.source || 'yahoo');
 
     // Build daily bars
     const tsD = chartDaily.timestamp || [];
@@ -3014,7 +3031,7 @@ app.get('/api/session-bias', async (req, res) => {
     const contextBlob = {
       instrument: sym,
       current_price: +currentPrice.toFixed(2),
-      price_source: liveData.source,
+      price_source: sbPriceSource,
       prior_close: +priorClose.toFixed(2),
       prior_high: +priorHigh.toFixed(2),
       prior_low: +priorLow.toFixed(2),
