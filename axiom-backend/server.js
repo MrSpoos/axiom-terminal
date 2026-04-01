@@ -2504,6 +2504,89 @@ async function fetchInstrumentContext(symbol, ticker) {
   };
 }
 
+// ── Conviction scoring agent personas ─────────────────────────────────────────
+const MACRO_SCORER_PERSONA = `You are the Macro Regime agent for the Axiom Terminal. Your job is to score a specific futures trading setup based purely on macro conditions: overnight news, economic calendar risk, VIX/risk sentiment, DXY direction, and whether the broad macro environment supports or fades the proposed trade direction. You receive a setup description and current market context. Respond ONLY with valid JSON, no markdown: {"vote": "CONFIRM|FADE|NEUTRAL", "confidence": <number 0-100>, "reason": "<one sentence max>"}`;
+
+const TECHNICAL_SCORER_PERSONA = `You are the Technical Structure agent for the Axiom Terminal. Your job is to score a specific futures trading setup based purely on technical structure: price location relative to value area, key levels, gap fill probability, ADR remaining, prior day high/low, and whether the technical picture supports or fades the proposed trade direction. You receive a setup description and current market context. Respond ONLY with valid JSON, no markdown: {"vote": "CONFIRM|FADE|NEUTRAL", "confidence": <number 0-100>, "reason": "<one sentence max>"}`;
+
+const ORDERFLOW_SCORER_PERSONA = `You are the Order Flow agent for the Axiom Terminal. Your job is to score a specific futures trading setup based on order flow logic: where stop clusters likely sit, liquidity pools, whether the setup direction is with or against likely institutional positioning, and sweep risk. You receive a setup description and current market context. Respond ONLY with valid JSON, no markdown: {"vote": "CONFIRM|FADE|NEUTRAL", "confidence": <number 0-100>, "reason": "<one sentence max>"}`;
+
+// ── Shared single-agent caller (used by conviction scoring) ───────────────────
+async function runAgentCall(persona, userContent) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 200,
+      temperature: 0,
+      system: `Today's date is ${todayDateStr()}.\n\n${persona}`,
+      messages: [{ role: 'user', content: userContent }],
+    }),
+  });
+  if (!r.ok) throw new Error(`Anthropic ${r.status}`);
+  const d = await r.json();
+  const text = (d?.content?.[0]?.text || '').replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  return JSON.parse(text);
+}
+
+// ── scoreSetup — runs 3 scoring agents in parallel for one setup ──────────────
+async function scoreSetup(setup, instrumentContext) {
+  const brief = `SETUP TO SCORE:
+Playbook: ${setup.playbook} — ${setup.name}
+Direction: ${(setup.direction || '').toUpperCase()}
+Trigger condition: ${setup.trigger_condition}
+Targets: ${(setup.targets || []).join(', ')}
+Invalidation: ${setup.invalidation}
+Context already met: ${(setup.context_met || []).join('; ')}
+Context not yet met: ${(setup.context_not_met || []).join('; ')}
+
+INSTRUMENT CONTEXT:
+Symbol: ${instrumentContext.instrument}
+Open location: ${instrumentContext.open_location}
+Day type hypothesis: ${instrumentContext.day_type_hypothesis}
+ADR consumed: ${instrumentContext.adr_state?.consumed_pct ?? 'N/A'}%
+Prior VAH: ${instrumentContext._context?.prev?.vah ?? 'N/A'}
+Prior VAL: ${instrumentContext._context?.prev?.val ?? 'N/A'}
+Prior POC: ${instrumentContext._context?.prev?.poc ?? 'N/A'}
+Current price: ${instrumentContext._context?.today?.current_price ?? 'N/A'}
+Session bias: ${instrumentContext.session_bias ?? 'N/A'}
+
+Vote CONFIRM if macro/technical/order flow supports this setup.
+Vote FADE if conditions actively oppose it.
+Vote NEUTRAL if insufficient edge either way.`.trim();
+
+  const [macroScore, techScore, flowScore] = await Promise.all([
+    runAgentCall(MACRO_SCORER_PERSONA, brief),
+    runAgentCall(TECHNICAL_SCORER_PERSONA, brief),
+    runAgentCall(ORDERFLOW_SCORER_PERSONA, brief),
+  ]);
+
+  const votes = [macroScore.vote, techScore.vote, flowScore.vote];
+  const confirms = votes.filter(v => v === 'CONFIRM').length;
+  const fades    = votes.filter(v => v === 'FADE').length;
+  const neutrals = votes.filter(v => v === 'NEUTRAL').length;
+  const convictionScore = confirms - fades; // -3 to +3
+
+  let convictionLabel;
+  if (convictionScore >= 2)      convictionLabel = 'HIGH CONFIRM';
+  else if (convictionScore === 1) convictionLabel = 'CONFIRM';
+  else if (convictionScore === 0) convictionLabel = 'NEUTRAL';
+  else if (convictionScore === -1) convictionLabel = 'FADE';
+  else                            convictionLabel = 'STRONG FADE';
+
+  return {
+    conviction: convictionLabel,
+    convictionScore,
+    votes: { macro: macroScore, technical: techScore, orderFlow: flowScore },
+    summary: `${confirms}✓ ${fades}✗ ${neutrals}—`,
+  };
+}
+
 const SETUP_MONITOR_SYSTEM = `You are the Axiom Terminal setup monitor. You do NOT issue live buy/sell signals. Your job is to read pre-open market context, identify which Market Stalkers playbooks are structurally eligible, and output precise conditional trigger statements the trader watches for manually.
 
 Respond ONLY with valid JSON — no markdown, no preamble.
@@ -2585,7 +2668,33 @@ app.get('/api/setup-monitor', async (req, res) => {
       SETUP_INSTRUMENTS.map(async ({ symbol, ticker }) => {
         const context = await fetchInstrumentContext(symbol, ticker);
         const analysis = await runSetupAnalysis(context);
-        return { ...analysis, _context: context };
+        const withContext = { ...analysis, _context: context };
+
+        // ── Conviction scoring pass (Layer 2) ────────────────────────────────
+        if (withContext.eligible_setups && withContext.eligible_setups.length > 0) {
+          const scoredSetups = await Promise.all(
+            withContext.eligible_setups.map(async (setup) => {
+              try {
+                const score = await scoreSetup(setup, withContext);
+                return { ...setup, conviction: score };
+              } catch (err) {
+                console.warn(`Conviction scoring failed for ${symbol}/${setup.playbook}:`, err.message);
+                return {
+                  ...setup,
+                  conviction: {
+                    conviction: 'NEUTRAL',
+                    convictionScore: 0,
+                    votes: {},
+                    summary: 'Scoring unavailable',
+                  },
+                };
+              }
+            })
+          );
+          withContext.eligible_setups = scoredSetups;
+        }
+
+        return withContext;
       })
     );
     const output = results.map((r, i) => {
@@ -2601,6 +2710,391 @@ app.get('/api/setup-monitor', async (req, res) => {
   } catch (err) {
     console.error('Setup monitor error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /api/session-bias — 4 Parallel AI Agents + Synthesizer ────────────────────
+
+const SESSION_BIAS_AGENTS = {
+  macro: {
+    name: 'Macro Regime',
+    system: `You are a macro regime analyst. Given overnight market data, determine the current macro regime and its directional bias for intraday futures trading. Consider:
+- Overnight range direction and size relative to prior session
+- VIX level and change (>20 = elevated fear, <15 = complacent)
+- Bond yields (DXY/TLT direction)
+- Gap direction and size vs ATR
+- Any overnight session extremes (globex high/low vs prior RTH)
+
+Respond ONLY with valid JSON — no markdown, no code fences:
+{
+  "regime": "RISK_ON" | "RISK_OFF" | "TRANSITIONAL" | "NEUTRAL",
+  "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "key_factors": ["<factor1>", "<factor2>", "<factor3>"],
+  "vix_read": "<1 sentence VIX interpretation>",
+  "overnight_read": "<1 sentence overnight action interpretation>",
+  "reasoning": "<2-3 sentence macro thesis>"
+}`,
+  },
+  technical: {
+    name: 'Technical Structure',
+    system: `You are a technical structure analyst for intraday futures. Given current price, Value Area (VAH/VAL/POC), QP levels, overnight range, and ATR data, determine the structural bias. Consider:
+- Where price opens relative to yesterday's Value Area (Above/Inside/Below)
+- Distance from key QP levels (QHi/QP/QMid/QLo) and which quartile price sits in
+- Gap fill probability (gap into value = high fill probability)
+- Overnight range as % of ADR (large = extension likely, small = rotation likely)
+- Key levels above and below for targets/support
+
+Respond ONLY with valid JSON — no markdown, no code fences:
+{
+  "structure": "TRENDING" | "ROTATIONAL" | "BREAKOUT" | "MEAN_REVERT",
+  "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "va_open": "ABOVE_VAH" | "INSIDE_VA" | "BELOW_VAL",
+  "qp_position": "<which QP quartile price sits in>",
+  "gap_analysis": "<gap direction, size, fill probability>",
+  "key_levels_above": [<level1>, <level2>],
+  "key_levels_below": [<level1>, <level2>],
+  "reasoning": "<2-3 sentence structural thesis>"
+}`,
+  },
+  flow: {
+    name: 'Order Flow & Positioning',
+    system: `You are a positioning and order flow analyst. Given the overnight range, prior session's value area, IB expectations, and ADR data, infer likely positioning and order flow dynamics. Consider:
+- Where trapped traders likely are (overnight longs/shorts)
+- Likely stop clusters (above overnight high, below overnight low, around VA edges)
+- Expected IB behavior based on gap and overnight range
+- ADR remaining capacity in each direction
+- Session-specific flow patterns (e.g., London open drive, NY reversal)
+
+Respond ONLY with valid JSON — no markdown, no code fences:
+{
+  "positioning": "LONG_HEAVY" | "SHORT_HEAVY" | "BALANCED" | "UNCLEAR",
+  "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "trapped_traders": "<where stops likely are>",
+  "stop_clusters": {"above": [<level>], "below": [<level>]},
+  "ib_expectation": "<expected IB behavior>",
+  "adr_capacity": {"upside_pct": <number>, "downside_pct": <number>},
+  "reasoning": "<2-3 sentence flow/positioning thesis>"
+}`,
+  },
+  session: {
+    name: 'Session Playbook',
+    system: `You are a session playbook specialist for the Axiom Edge framework. Given all market context, determine which playbooks are most likely to trigger today and what the optimal session plan is. Consider:
+- Gap direction + VA open → which playbooks are structurally eligible
+- ADR capacity remaining → PB3 viability
+- IB expectations → PB1 vs PB2 priority
+- Day type expectation (trending vs rotational vs limited)
+- Optimal DTTZ windows for entries
+
+Respond ONLY with valid JSON — no markdown, no code fences:
+{
+  "primary_playbook": "PB1" | "PB2" | "PB3" | "PB4" | "NONE",
+  "secondary_playbook": "PB1" | "PB2" | "PB3" | "PB4" | "NONE",
+  "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "day_type_expectation": "TRENDING" | "NORMAL_VARIATION" | "ROTATIONAL" | "LIMITED",
+  "entry_windows": ["<window1>", "<window2>"],
+  "watch_for": ["<trigger1>", "<trigger2>", "<trigger3>"],
+  "avoid": ["<scenario1>"],
+  "reasoning": "<2-3 sentence session game plan>"
+}`,
+  },
+};
+
+const SYNTHESIZER_SYSTEM = `You are the Axiom Session Bias Synthesizer. You receive analysis from 4 specialist agents — Macro Regime, Technical Structure, Order Flow, and Session Playbook. Your job is to synthesize their findings into a single unified pre-session bias.
+
+Rules:
+- If 3+ agents agree on direction → HIGH confidence composite bias
+- If 2 agents agree, 2 disagree → MEDIUM confidence, note the conflict
+- If no majority → LOW confidence, recommend reduced size or flat
+- Always identify the PRIMARY risk scenario (what invalidates the bias)
+- Provide a clear 1-sentence "bias statement" a trader can act on
+
+Respond ONLY with valid JSON — no markdown, no code fences:
+{
+  "composite_bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": "HIGH" | "MEDIUM" | "LOW",
+  "bias_statement": "<1 clear actionable sentence>",
+  "agent_agreement": {
+    "bullish_count": <0-4>,
+    "bearish_count": <0-4>,
+    "neutral_count": <0-4>
+  },
+  "primary_risk": "<what would invalidate this bias>",
+  "key_level_bull": <price level that confirms bull case>,
+  "key_level_bear": <price level that confirms bear case>,
+  "size_recommendation": "FULL" | "REDUCED" | "FLAT",
+  "session_plan": "<2-3 sentence synthesized game plan>",
+  "conflicts": ["<any agent disagreements worth noting>"]
+}`;
+
+async function callBiasAgent(agentKey, systemPrompt, userPrompt) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 800,
+      temperature: 0,
+      system: `Today's date is ${todayDateStr()}.\n\n${systemPrompt}`,
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`${agentKey} agent: Anthropic ${res.status} — ${errText.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = (data?.content?.[0]?.text || '').replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  return JSON.parse(text);
+}
+
+app.get('/api/session-bias', async (req, res) => {
+  const sym = (req.query.symbol || 'ES').toUpperCase();
+  const yahooSym = AUTO_SYMBOL_MAP[sym];
+  if (!yahooSym) return res.status(400).json({ error: `Unknown symbol: ${sym}. Use ES/NQ/DAX/XAU/OIL` });
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
+
+  const tick = TICK_SIZE[sym] || 0.25;
+
+  try {
+    // ── Step 1: Auto-fetch all market data from Yahoo Finance ──
+    const [chart30m, chartDaily, liveData, vixData] = await Promise.all([
+      yahooChart(yahooSym, '30m', '5d'),
+      yahooChart(yahooSym, '1d', '3mo'),
+      getLivePrice(sym === 'XAU' ? 'GC' : sym === 'OIL' ? 'CL' : sym, yahooSym),
+      yahooQuote('^VIX').catch(() => ({ price: 0, chg: 0, pct: 0 })),
+    ]);
+
+    const meta = chart30m.meta || {};
+    const currentPrice = liveData.price || meta.regularMarketPrice || 0;
+
+    // Build daily bars
+    const tsD = chartDaily.timestamp || [];
+    const qD = chartDaily.indicators?.quote?.[0] || {};
+    const dailyBars = [];
+    for (let i = 0; i < tsD.length; i++) {
+      if (qD.open?.[i] != null && qD.high?.[i] != null && qD.low?.[i] != null && qD.close?.[i] != null) {
+        dailyBars.push({ ts: tsD[i], open: qD.open[i], high: qD.high[i], low: qD.low[i], close: qD.close[i] });
+      }
+    }
+
+    // Build 30m bars
+    const ts30 = chart30m.timestamp || [];
+    const q30 = chart30m.indicators?.quote?.[0] || {};
+    const bars30m = [];
+    for (let i = 0; i < ts30.length; i++) {
+      if (q30.open?.[i] != null && q30.high?.[i] != null && q30.low?.[i] != null && q30.close?.[i] != null) {
+        bars30m.push({ ts: ts30[i], open: q30.open[i], high: q30.high[i], low: q30.low[i], close: q30.close[i] });
+      }
+    }
+
+    // ATR & ADR
+    const atr14 = calcATR(dailyBars, 14);
+    const adr20 = calcATR(dailyBars, 20);
+
+    // Yesterday RTH bars for TPO Value Area
+    const nowEST = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const todayStr = `${nowEST.getFullYear()}-${String(nowEST.getMonth() + 1).padStart(2, '0')}-${String(nowEST.getDate()).padStart(2, '0')}`;
+
+    const yesterdayRTH = [];
+    const todayBars = [];
+    for (const bar of bars30m) {
+      const d = new Date(bar.ts * 1000);
+      const est = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const dateStr = `${est.getFullYear()}-${String(est.getMonth() + 1).padStart(2, '0')}-${String(est.getDate()).padStart(2, '0')}`;
+      const hhmm = est.getHours() * 60 + est.getMinutes();
+      if (dateStr === todayStr) {
+        todayBars.push(bar);
+      } else if (hhmm >= 570 && hhmm < 960) {
+        yesterdayRTH.push(bar);
+      }
+    }
+    // Keep only last day's RTH
+    if (yesterdayRTH.length > 0) {
+      const lastRTHDate = new Date(yesterdayRTH[yesterdayRTH.length - 1].ts * 1000)
+        .toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
+      const filtered = yesterdayRTH.filter(b => {
+        const d = new Date(b.ts * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' }).split(',')[0];
+        return d === lastRTHDate;
+      });
+      yesterdayRTH.length = 0;
+      yesterdayRTH.push(...filtered);
+    }
+
+    // Value Area
+    const va = calcTPOValueArea(yesterdayRTH, tick);
+
+    // QP levels
+    const lastBar = dailyBars[dailyBars.length - 1];
+    const lastDate = lastBar ? new Date(lastBar.ts * 1000) : new Date();
+    const curQtr = Math.floor(lastDate.getMonth() / 3);
+    const prevQtrEnd = new Date(lastDate.getFullYear(), curQtr * 3, 0);
+    const prevQtrStart = new Date(prevQtrEnd.getFullYear(), prevQtrEnd.getMonth() - 2, 1);
+    const qtrBars = dailyBars.filter(b => {
+      const d = new Date(b.ts * 1000);
+      return d >= prevQtrStart && d <= prevQtrEnd;
+    });
+    let d1Pivots = { qp: 0, qhi: 0, qmid: 0, qlo: 0 };
+    if (qtrBars.length > 0) {
+      const qHigh = Math.max(...qtrBars.map(b => b.high));
+      const qLow = Math.min(...qtrBars.map(b => b.low));
+      const qClose = qtrBars[qtrBars.length - 1].close;
+      d1Pivots = calcQuarterlyPivots(qHigh, qLow, qClose);
+    }
+
+    // Overnight range (globex: today's bars before RTH open)
+    const overnightBars = todayBars.filter(b => {
+      const d = new Date(b.ts * 1000);
+      const est = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      return est.getHours() * 60 + est.getMinutes() < 570; // before 9:30 ET
+    });
+    const overnightHigh = overnightBars.length > 0 ? Math.max(...overnightBars.map(b => b.high)) : null;
+    const overnightLow = overnightBars.length > 0 ? Math.min(...overnightBars.map(b => b.low)) : null;
+
+    // Prior session close
+    const priorClose = dailyBars.length >= 2 ? dailyBars[dailyBars.length - 2].close : lastBar?.close || currentPrice;
+    const priorHigh = dailyBars.length >= 2 ? dailyBars[dailyBars.length - 2].high : lastBar?.high || currentPrice;
+    const priorLow = dailyBars.length >= 2 ? dailyBars[dailyBars.length - 2].low : lastBar?.low || currentPrice;
+
+    // Gap
+    const gap = currentPrice - priorClose;
+    const gapPct = priorClose !== 0 ? (gap / priorClose) * 100 : 0;
+    const gapVsATR = atr14 !== 0 ? Math.abs(gap) / atr14 : 0;
+
+    // VA open position
+    let vaOpen = 'Inside VA';
+    if (currentPrice > va.vah) vaOpen = 'Above VAH';
+    else if (currentPrice < va.val) vaOpen = 'Below VAL';
+
+    // Trend from QP
+    let trend = 'NEUTRAL';
+    if (currentPrice > d1Pivots.qp && currentPrice > d1Pivots.qmid) trend = 'UP';
+    else if (currentPrice < d1Pivots.qp && currentPrice < d1Pivots.qmid) trend = 'DOWN';
+
+    // ADR remaining capacity
+    const todayOpen = lastBar?.open || currentPrice;
+    const upsidePct = adr20 > 0 ? +((currentPrice - todayOpen + (adr20 / 2)) / adr20 * 100).toFixed(0) : 50;
+    const downsidePct = adr20 > 0 ? +((todayOpen - currentPrice + (adr20 / 2)) / adr20 * 100).toFixed(0) : 50;
+
+    // Session info
+    const session = getCurrentSession(sym);
+    const ibStatus = getIBStatus(sym);
+    const ibWindow = getIBWindow(sym);
+
+    // ── Build context blob for all agents ──
+    const contextBlob = {
+      instrument: sym,
+      current_price: +currentPrice.toFixed(2),
+      price_source: liveData.source,
+      prior_close: +priorClose.toFixed(2),
+      prior_high: +priorHigh.toFixed(2),
+      prior_low: +priorLow.toFixed(2),
+      gap: +gap.toFixed(2),
+      gap_pct: +gapPct.toFixed(3),
+      gap_vs_atr: +gapVsATR.toFixed(2),
+      overnight_high: overnightHigh ? +overnightHigh.toFixed(2) : null,
+      overnight_low: overnightLow ? +overnightLow.toFixed(2) : null,
+      overnight_range: overnightHigh && overnightLow ? +(overnightHigh - overnightLow).toFixed(2) : null,
+      vah: va.vah, val: va.val, poc: va.poc,
+      va_open: vaOpen,
+      d1_qp: d1Pivots.qp, d1_qhi: d1Pivots.qhi, d1_qmid: d1Pivots.qmid, d1_qlo: d1Pivots.qlo,
+      trend,
+      atr14, adr20,
+      adr_upside_capacity_pct: upsidePct,
+      adr_downside_capacity_pct: downsidePct,
+      vix: vixData.price, vix_chg: vixData.chg, vix_pct: +vixData.pct.toFixed(2),
+      session, ib_status: ibStatus, ib_window: ibWindow.label,
+      current_time_et: new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true }),
+    };
+
+    const contextPrompt = `INSTRUMENT: ${sym}
+CURRENT PRICE: ${contextBlob.current_price} (${contextBlob.price_source})
+PRIOR SESSION: Close ${contextBlob.prior_close} | High ${contextBlob.prior_high} | Low ${contextBlob.prior_low}
+GAP: ${contextBlob.gap > 0 ? '+' : ''}${contextBlob.gap} (${contextBlob.gap_pct > 0 ? '+' : ''}${contextBlob.gap_pct}%) — ${contextBlob.gap_vs_atr.toFixed(2)}x ATR
+OVERNIGHT RANGE: ${contextBlob.overnight_high || 'N/A'} / ${contextBlob.overnight_low || 'N/A'} (${contextBlob.overnight_range || 'N/A'} pts)
+VALUE AREA (yesterday RTH): VAH ${contextBlob.vah} | POC ${contextBlob.poc} | VAL ${contextBlob.val}
+VA OPEN: ${contextBlob.va_open}
+QP LEVELS: QHi ${contextBlob.d1_qhi} | QP ${contextBlob.d1_qp} | QMid ${contextBlob.d1_qmid} | QLo ${contextBlob.d1_qlo}
+TREND (QP): ${contextBlob.trend}
+ATR(14): ${contextBlob.atr14} | ADR(20): ${contextBlob.adr20}
+ADR CAPACITY: Upside ${contextBlob.adr_upside_capacity_pct}% | Downside ${contextBlob.adr_downside_capacity_pct}%
+VIX: ${contextBlob.vix} (${contextBlob.vix_chg > 0 ? '+' : ''}${contextBlob.vix_chg}, ${contextBlob.vix_pct > 0 ? '+' : ''}${contextBlob.vix_pct}%)
+SESSION: ${contextBlob.session} | IB: ${contextBlob.ib_status} (${contextBlob.ib_window})
+TIME (ET): ${contextBlob.current_time_et}`;
+
+    // ── Step 2: Fire all 4 agents in parallel (Promise.all) ──
+    const agentKeys = Object.keys(SESSION_BIAS_AGENTS);
+    const agentResults = {};
+    const agentErrors = {};
+
+    const settled = await Promise.allSettled(
+      agentKeys.map(key =>
+        callBiasAgent(key, SESSION_BIAS_AGENTS[key].system, contextPrompt)
+          .then(result => ({ key, result }))
+      )
+    );
+
+    for (const r of settled) {
+      if (r.status === 'fulfilled') {
+        agentResults[r.value.key] = r.value.result;
+      } else {
+        const key = agentKeys[settled.indexOf(r)];
+        agentErrors[key] = r.reason?.message || 'Unknown error';
+        console.error(`Session bias ${key} agent failed:`, r.reason?.message);
+      }
+    }
+
+    // ── Step 3: Run the Synthesizer ──
+    let synthesis = null;
+    const successfulAgents = Object.keys(agentResults);
+    if (successfulAgents.length >= 2) {
+      const synthPrompt = `Here are the outputs from ${successfulAgents.length} specialist agents analysing ${sym}:
+
+${successfulAgents.map(key => `### ${SESSION_BIAS_AGENTS[key].name} Agent
+${JSON.stringify(agentResults[key], null, 2)}`).join('\n\n')}
+
+${Object.keys(agentErrors).length > 0 ? `\nFAILED AGENTS: ${Object.keys(agentErrors).join(', ')} — factor the missing perspective into your confidence.\n` : ''}
+MARKET CONTEXT:
+${contextPrompt}
+
+Synthesize these into a single unified session bias.`;
+
+      try {
+        synthesis = await callBiasAgent('synthesizer', SYNTHESIZER_SYSTEM, synthPrompt);
+      } catch (e) {
+        console.error('Synthesizer failed:', e.message);
+        agentErrors.synthesizer = e.message;
+      }
+    } else {
+      agentErrors.synthesizer = `Only ${successfulAgents.length} agents succeeded — need at least 2 for synthesis`;
+    }
+
+    // ── Step 4: Return everything ──
+    res.json({
+      success: true,
+      symbol: sym,
+      context: contextBlob,
+      agents: {
+        macro: agentResults.macro || null,
+        technical: agentResults.technical || null,
+        flow: agentResults.flow || null,
+        session: agentResults.session || null,
+      },
+      synthesis,
+      errors: Object.keys(agentErrors).length > 0 ? agentErrors : null,
+      ts: new Date().toISOString(),
+    });
+
+  } catch (err) {
+    console.error('Session bias error:', err);
+    res.status(500).json({ error: err.message, symbol: sym });
   }
 });
 
@@ -2624,6 +3118,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/journal     — Trade Journal CRUD`);
   console.log(`   /api/scanner     — Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/setup-monitor — Conditional Setup Monitor (ES/NQ/GC/CL)`);
+  console.log(`   /api/session-bias — 4-Agent Session Bias Synthesizer (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
   console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
   console.log(`   /api/adr-asr     — Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);
