@@ -3300,17 +3300,32 @@ Active Setups: ${sessionContext.activeSetups?.length
   : 'None identified'
 }`.trim();
 
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 400,
-      temperature: 0.7,
-      system: TRADING_BUDDY_SYSTEM + '\n\n' + contextBlock,
-      messages: messages,
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 400,
+        temperature: 0.7,
+        system: TRADING_BUDDY_SYSTEM + '\n\n' + contextBlock,
+        messages: messages,
+      }),
     });
 
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      console.error('Trading chat Anthropic error:', aiRes.status, errText);
+      return res.status(502).json({ error: `Anthropic ${aiRes.status}: ${errText.slice(0, 200)}` });
+    }
+
+    const data = await aiRes.json();
     res.json({
-      reply: response.content[0].text,
-      usage: response.usage,
+      reply: data.content[0].text,
+      usage: data.usage,
     });
   } catch (err) {
     console.error('Trading chat error:', err);
