@@ -3,6 +3,8 @@ import SignalsPanel from "./components/SignalsPanel";
 import SetupMonitor from "./components/SetupMonitor";
 import SessionBias from "./components/SessionBias";
 import TradingBuddy from "./components/TradingBuddy";
+import ProjectXSetup from "./components/ProjectXSetup";
+import { useProjectX, CONTRACT_IDS } from "./services/projectx";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
@@ -517,13 +519,20 @@ function NewsFeed({ newsItems = NEWS_FALLBACK, newsStatus = "static" }) {
   );
 }
 
-function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStatus }) {
+function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStatus, liveOverrides }) {
+  const overlay = liveOverrides || {};
+  const applyLive = (sym, data) => {
+    const contractId = CONTRACT_IDS[sym];
+    const livePrice = contractId ? overlay[contractId] : null;
+    if (!livePrice || !data) return data;
+    return { ...data, price: livePrice, source: "projectx" };
+  };
   const futuresItems = [
-    { sym: "VIX",  name: "CBOE Volatility",    data: market?.vix, color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
-    { sym: "ES",   name: "E-mini S&P 500",      data: market?.es,  color: "#4a9eff",  accentBg: "rgba(74,158,255,0.06)",  accentBorder: "rgba(74,158,255,0.2)"  },
-    { sym: "NQ",   name: "E-mini Nasdaq 100",   data: market?.nq,  color: "#a78bfa",  accentBg: "rgba(167,139,250,0.06)", accentBorder: "rgba(167,139,250,0.2)" },
-    { sym: "GC",   name: "Gold Futures",         data: market?.gc,  color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
-    { sym: "CL",   name: "Crude Oil Futures",    data: market?.cl,  color: "#00d4aa",  accentBg: "rgba(0,212,170,0.06)",   accentBorder: "rgba(0,212,170,0.2)"   },
+    { sym: "VIX",  name: "CBOE Volatility",    data: market?.vix,               color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
+    { sym: "ES",   name: "E-mini S&P 500",      data: applyLive("ES", market?.es), color: "#4a9eff",  accentBg: "rgba(74,158,255,0.06)",  accentBorder: "rgba(74,158,255,0.2)"  },
+    { sym: "NQ",   name: "E-mini Nasdaq 100",   data: applyLive("NQ", market?.nq), color: "#a78bfa",  accentBg: "rgba(167,139,250,0.06)", accentBorder: "rgba(167,139,250,0.2)" },
+    { sym: "GC",   name: "Gold Futures",         data: applyLive("GC", market?.gc), color: "#f6c90e",  accentBg: "rgba(246,201,14,0.06)",  accentBorder: "rgba(246,201,14,0.2)"  },
+    { sym: "CL",   name: "Crude Oil Futures",    data: applyLive("CL", market?.cl), color: "#00d4aa",  accentBg: "rgba(0,212,170,0.06)",   accentBorder: "rgba(0,212,170,0.2)"   },
   ];
   return (
     <div>
@@ -549,7 +558,7 @@ function MarketCards({ tickers, status, lastUpdated, refresh, market, marketStat
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'IBM Plex Mono', monospace" }}>{sym}</span>
-                {data?.source === "dxfeed" ? (
+                {(data?.source === "dxfeed" || data?.source === "projectx") ? (
                   <span style={{ fontSize: 7, fontWeight: 700, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(0,212,170,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>LIVE</span>
                 ) : data?.source === "yahoo" ? (
                   <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", fontFamily: "'IBM Plex Mono', monospace", padding: "1px 4px", background: "rgba(246,201,14,0.12)", borderRadius: 2, letterSpacing: "0.06em" }}>DELAYED</span>
@@ -613,6 +622,7 @@ export default function Terminal() {
   const { news, newsStatus }                       = useLiveNews();
   const { market, marketStatus }                   = useLiveMarket();
   const macroLive                                  = useLiveMacro();
+  const { connected: pxConnected, livePrices, login: pxLogin, logout: pxLogout, reconnect: pxReconnect } = useProjectX();
   const [activeTab, setActiveTab] = useState("MARKETS");
   const [pendingJournalEntry, setPendingJournalEntry] = useState(null);
 
@@ -646,7 +656,15 @@ export default function Terminal() {
             {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS","SESSION BIAS","BUDDY"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
           </nav>
         </div>
-        <Clock />
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <ProjectXSetup
+            connected={pxConnected}
+            onLogin={pxLogin}
+            onLogout={pxLogout}
+            onReconnect={pxReconnect}
+          />
+          <Clock />
+        </div>
       </div>
       <TickerTape tickers={tickers} />
       <div className="terminal-root" style={{ flex: 1, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
@@ -669,10 +687,10 @@ export default function Terminal() {
         ) : activeTab === "SESSION BIAS" ? (
           <SessionBias />
         ) : activeTab === "BUDDY" ? (
-          <TradingBuddy />
+          <TradingBuddy livePrice={livePrices[CONTRACT_IDS.ES]} pxConnected={pxConnected} />
         ) : (
           <>
-            <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} />
+            <MarketCards tickers={tickers} status={status} lastUpdated={lastUpdated} refresh={refresh} market={market} marketStatus={marketStatus} liveOverrides={livePrices} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1fr", gap: 12, height: 520 }}>
               <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`}>
                 <NewsFeed newsItems={news} newsStatus={newsStatus} />

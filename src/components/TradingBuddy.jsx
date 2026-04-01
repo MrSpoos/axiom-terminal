@@ -47,7 +47,7 @@ function EmptyState({ onSend }) {
   return <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:20 }}><div style={{ textAlign:"center" }}><div style={{ fontSize:28, marginBottom:8 }}>◈</div><div style={{ fontSize:13, color:"#64748b", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:"0.05em" }}>YOUR TRADING BUDDY IS READY</div><div style={{ fontSize:11, color:"#334155", marginTop:4 }}>Type or tap the mic to speak</div></div><div style={{ display:"flex", flexDirection:"column", gap:8, width:"100%", maxWidth:420 }}>{STARTERS.map((s,i) => <button key={i} onClick={() => onSend(s)} style={{ background:"rgba(245,158,11,0.06)", border:"1px solid rgba(245,158,11,0.2)", borderRadius:8, padding:"10px 16px", color:"#f59e0b", fontSize:12, cursor:"pointer", textAlign:"left" }}>{s}</button>)}</div></div>;
 }
 
-export default function TradingBuddy() {
+export default function TradingBuddy({ livePrice, pxConnected }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -161,6 +161,13 @@ export default function TradingBuddy() {
     return () => clearInterval(intervalRef.current);
   }, [fetchContext]);
 
+  // Override currentPrice with live ProjectX feed when connected
+  useEffect(() => {
+    if (livePrice != null) {
+      setSessionContext(prev => ({ ...prev, currentPrice: livePrice }));
+    }
+  }, [livePrice]);
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages, loading]);
 
   const send = useCallback(async (text) => {
@@ -224,6 +231,10 @@ export default function TradingBuddy() {
         <BiasChip bias={sessionContext.sessionBias} />
         <CtxPill label="DAY" value={sessionContext.dayType} />
         <CtxPill label="PRICE" value={sessionContext.currentPrice} color="#e2e8f0" />
+        {pxConnected
+          ? <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: "#00d4aa", background: "rgba(0,212,170,0.1)", border: "1px solid rgba(0,212,170,0.25)", borderRadius: 3, padding: "2px 6px" }}>LIVE</span>
+          : <span style={{ fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", color: "#f59e0b", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 3, padding: "2px 6px" }}>DELAYED</span>
+        }
         <CtxPill label="VAH" value={sessionContext.vah} color="#4a9eff" />
         <CtxPill label="POC" value={sessionContext.poc} color="#a78bfa" />
         <CtxPill label="VAL" value={sessionContext.val} color="#4a9eff" />
