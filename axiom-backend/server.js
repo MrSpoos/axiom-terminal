@@ -3120,6 +3120,144 @@ Synthesize these into a single unified session bias.`;
   }
 });
 
+// ── POST /api/session-bias — 4-agent parallel bias analysis ──────────────────
+
+const SB_TICKER_MAP = { ES: 'ES=F', NQ: 'NQ=F', GC: 'GC=F', CL: 'CL=F' };
+
+// Agent personas — each returns { bias, confidence, keyLevel, reasoning, dayType }
+const RETAIL_PERSONA = `You are a retail trader analyst. Analyse the market seed and assess what the majority of retail traders are likely doing: their bias, where they are positioned, and whether price will run stops or confirm their view. Respond ONLY with valid JSON, no markdown:
+{"bias":"bullish|bearish|neutral","confidence":<0-100>,"keyLevel":"<price level>","reasoning":"<one sentence>","dayType":"<trending|range|gap_and_go|gap_and_fail|rotation>"}`;
+
+const INSTITUTIONAL_PERSONA = `You are an institutional order flow analyst. Analyse the market seed from a large-player perspective: where institutions are likely accumulating or distributing, whether the overnight range represents a trap or genuine positioning, and what the smart-money bias is. Respond ONLY with valid JSON, no markdown:
+{"bias":"bullish|bearish|neutral","confidence":<0-100>,"keyLevel":"<price level>","reasoning":"<one sentence>","dayType":"<trending|range|gap_and_go|gap_and_fail|rotation>"}`;
+
+const ALGO_PERSONA = `You are an algorithmic trading systems analyst. Analyse the market seed from a systematic/quant perspective: momentum signals, mean-reversion probability, gap statistics, and whether price action favours trend-following or counter-trend algorithms today. Respond ONLY with valid JSON, no markdown:
+{"bias":"bullish|bearish|neutral","confidence":<0-100>,"keyLevel":"<price level>","reasoning":"<one sentence>","dayType":"<trending|range|gap_and_go|gap_and_fail|rotation>"}`;
+
+const MARKETMAKER_PERSONA = `You are a market-maker analyst. Analyse the market seed from a liquidity-provision perspective: where the highest liquidity pools sit, likely gamma/delta hedging flows, bid-ask dynamics around key levels, and whether market-makers will facilitate or resist the prevailing directional move. Respond ONLY with valid JSON, no markdown:
+{"bias":"bullish|bearish|neutral","confidence":<0-100>,"keyLevel":"<price level>","reasoning":"<one sentence>","dayType":"<trending|range|gap_and_go|gap_and_fail|rotation>"}`;
+
+const SB_SYNTHESIZER_SYSTEM = `You are the Axiom Session Bias Synthesizer. You receive analysis from 4 market-participant agents. Weight their views as follows: Institutional 40%, Algo 30%, MarketMaker 20%, Retail 10%. Produce a single weighted synthesis. Respond ONLY with valid JSON, no markdown:
+{"finalBias":"bullish|bearish|neutral","confidence":<0-100>,"dayType":"<trending|range|gap_and_go|gap_and_fail|rotation>","keyLevel":"<most important price level>","riskWarning":"<one sentence on what invalidates the bias>","analysis":"<2-3 sentence synthesized view>"}`;
+
+async function runSessionBiasAgent(persona, seed, temperature, maxTokens) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: maxTokens,
+      temperature,
+      system: `Today's date is ${todayDateStr()}.\n\n${persona}`,
+      messages: [{ role: 'user', content: seed }],
+    }),
+  });
+  if (!r.ok) throw new Error(`Anthropic ${r.status}`);
+  const d = await r.json();
+  const text = (d?.content?.[0]?.text || '').replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  return JSON.parse(text);
+}
+
+app.post('/api/session-bias', async (req, res) => {
+  const { instrument, newsContext, priorVAH, priorVAL, priorPOC } = req.body || {};
+  if (!instrument) return res.status(400).json({ error: 'instrument required' });
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
+
+  const ticker = SB_TICKER_MAP[instrument.toUpperCase()];
+  if (!ticker) return res.status(400).json({ error: `Unknown instrument: ${instrument}. Use ES/NQ/GC/CL` });
+
+  try {
+    // ── STEP 1: Fetch price data ─────────────────────────────────────────────
+    const [chart1m, chartDaily] = await Promise.all([
+      yahooChart(ticker, '1m', '1d'),
+      yahooChart(ticker, '1d', '5d'),
+    ]);
+
+    // 1-min bars — current_price, today_open, overnight_high, overnight_low
+    const ts1m = chart1m.timestamp || [];
+    const q1m  = chart1m.indicators?.quote?.[0] || {};
+    let todayOpen = null, overnightHigh = -Infinity, overnightLow = Infinity, currentPrice = null;
+    for (let i = 0; i < ts1m.length; i++) {
+      const c = q1m.close?.[i], h = q1m.high?.[i], l = q1m.low?.[i];
+      if (c == null || h == null || l == null) continue;
+      if (todayOpen === null) todayOpen = +c.toFixed(2);
+      overnightHigh = Math.max(overnightHigh, h);
+      overnightLow  = Math.min(overnightLow, l);
+      currentPrice  = +c.toFixed(2);
+    }
+    // Fallback to meta if bars sparse
+    if (currentPrice === null) currentPrice = +(chart1m.meta?.regularMarketPrice || 0).toFixed(2);
+    if (todayOpen   === null) todayOpen = currentPrice;
+    overnightHigh = overnightHigh === -Infinity ? null : +overnightHigh.toFixed(2);
+    overnightLow  = overnightLow  ===  Infinity ? null : +overnightLow.toFixed(2);
+
+    // Daily bars — prior_close, prior_high, prior_low (second-to-last complete day)
+    const tsD = chartDaily.timestamp || [];
+    const qD  = chartDaily.indicators?.quote?.[0] || {};
+    const dailyBars = [];
+    for (let i = 0; i < tsD.length; i++) {
+      if (qD.open?.[i] != null && qD.close?.[i] != null) {
+        dailyBars.push({ open: qD.open[i], high: qD.high[i], low: qD.low[i], close: qD.close[i] });
+      }
+    }
+    const priorDay  = dailyBars.length >= 2 ? dailyBars[dailyBars.length - 2] : dailyBars[dailyBars.length - 1] || {};
+    const priorClose = priorDay.close != null ? +priorDay.close.toFixed(2) : null;
+    const priorHigh  = priorDay.high  != null ? +priorDay.high.toFixed(2)  : null;
+    const priorLow   = priorDay.low   != null ? +priorDay.low.toFixed(2)   : null;
+    const gap        = priorClose != null && todayOpen != null ? +(todayOpen - priorClose).toFixed(2) : null;
+
+    const priceData = { currentPrice, todayOpen, overnightHigh, overnightLow, priorClose, priorHigh, priorLow, gap };
+
+    // ── STEP 2: Build seed string ────────────────────────────────────────────
+    const seed = `INSTRUMENT: ${instrument.toUpperCase()}
+CURRENT PRICE: ${currentPrice}
+TODAY OPEN: ${todayOpen}
+GAP vs PRIOR CLOSE: ${gap != null ? (gap >= 0 ? '+' : '') + gap : 'N/A'} (prior close: ${priorClose ?? 'N/A'})
+OVERNIGHT RANGE: ${overnightHigh ?? 'N/A'} / ${overnightLow ?? 'N/A'}
+PRIOR DAY: High ${priorHigh ?? 'N/A'} | Low ${priorLow ?? 'N/A'} | Close ${priorClose ?? 'N/A'}
+PRIOR VALUE AREA: VAH ${priorVAH ?? 'N/A'} | VAL ${priorVAL ?? 'N/A'} | POC ${priorPOC ?? 'N/A'}
+NEWS CONTEXT: ${newsContext || 'None provided'}`.trim();
+
+    // ── STEP 3: Run 4 agents in parallel ─────────────────────────────────────
+    const [retail, institutional, algo, marketmaker] = await Promise.all([
+      runSessionBiasAgent(RETAIL_PERSONA,        seed, 0.4, 500),
+      runSessionBiasAgent(INSTITUTIONAL_PERSONA, seed, 0.4, 500),
+      runSessionBiasAgent(ALGO_PERSONA,          seed, 0.4, 500),
+      runSessionBiasAgent(MARKETMAKER_PERSONA,   seed, 0.4, 500),
+    ]);
+
+    const agentResults = { retail, institutional, algo, marketmaker };
+
+    // ── STEP 4: Synthesizer ──────────────────────────────────────────────────
+    const synthSeed = `${seed}
+
+AGENT RESULTS:
+Retail (10% weight): ${JSON.stringify(retail)}
+Institutional (40% weight): ${JSON.stringify(institutional)}
+Algo (30% weight): ${JSON.stringify(algo)}
+MarketMaker (20% weight): ${JSON.stringify(marketmaker)}`;
+
+    const synthesis = await runSessionBiasAgent(SB_SYNTHESIZER_SYSTEM, synthSeed, 0, 600);
+
+    res.json({
+      success: true,
+      instrument: instrument.toUpperCase(),
+      priceData,
+      agentResults,
+      synthesis,
+      generated_at: new Date().toISOString(),
+    });
+
+  } catch (err) {
+    console.error('Session bias POST error:', err);
+    res.status(500).json({ error: err.message, instrument });
+  }
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
