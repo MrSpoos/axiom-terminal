@@ -2301,6 +2301,13 @@ app.post('/api/journal', (req, res) => {
     notes: d.notes || '',
     screenshot: d.screenshot || null,
     status: d.status || 'open',
+    // Conviction fields (captured at trade-log time)
+    conviction_label: d.conviction_label || null,
+    conviction_score: d.conviction_score != null ? Number(d.conviction_score) : null,
+    conviction_votes: d.conviction_votes || null,
+    session_bias: d.session_bias || null,
+    session_bias_confidence: d.session_bias_confidence != null ? Number(d.session_bias_confidence) : null,
+    agent_verdict: null,
   };
   // Calculate PnL in R
   if (entry.exit_price != null && entry.entry_price != null && entry.stop_price != null) {
@@ -2329,6 +2336,12 @@ app.put('/api/journal/:id', (req, res) => {
   if (d.stop_price !== undefined) entry.stop_price = d.stop_price != null ? Number(d.stop_price) : null;
   if (d.target_price !== undefined) entry.target_price = d.target_price != null ? Number(d.target_price) : null;
   if (d.screenshot !== undefined) entry.screenshot = d.screenshot;
+  // Conviction fields (can be set on create or update)
+  if (d.conviction_label !== undefined) entry.conviction_label = d.conviction_label || null;
+  if (d.conviction_score !== undefined) entry.conviction_score = d.conviction_score != null ? Number(d.conviction_score) : null;
+  if (d.conviction_votes !== undefined) entry.conviction_votes = d.conviction_votes || null;
+  if (d.session_bias !== undefined) entry.session_bias = d.session_bias || null;
+  if (d.session_bias_confidence !== undefined) entry.session_bias_confidence = d.session_bias_confidence != null ? Number(d.session_bias_confidence) : null;
   // Recalculate PnL
   if (entry.exit_price != null && entry.entry_price != null && entry.stop_price != null) {
     const risk = Math.abs(entry.entry_price - entry.stop_price);
@@ -2336,6 +2349,15 @@ app.put('/api/journal/:id', (req, res) => {
       const pnl = entry.direction === 'LONG' ? entry.exit_price - entry.entry_price : entry.entry_price - entry.exit_price;
       entry.pnl_r = +(pnl / risk).toFixed(2);
       entry.status = 'closed';
+      // Auto-calculate agent_verdict when closing a conviction-tracked trade
+      const cl = entry.conviction_label;
+      if (cl && cl !== 'NEUTRAL') {
+        const positive = cl === 'CONFIRM' || cl === 'HIGH CONFIRM';
+        const profitable = entry.pnl_r > 0;
+        entry.agent_verdict = (positive === profitable) ? 'AGENTS RIGHT' : 'AGENTS WRONG';
+      } else {
+        entry.agent_verdict = 'NEUTRAL OUTCOME';
+      }
     }
   }
   entries[idx] = entry;
