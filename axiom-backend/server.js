@@ -3258,6 +3258,55 @@ MarketMaker (20% weight): ${JSON.stringify(marketmaker)}`;
   }
 });
 
+// ── PROJECTX / TOPSTEPX AUTH ──────────────────────────────────────────────────
+
+app.post('/api/projectx/token', async (req, res) => {
+  try {
+    const { username, apiKey } = req.body;
+    if (!username || !apiKey) {
+      return res.status(400).json({ error: 'username and apiKey are required' });
+    }
+    const r = await fetch('https://gateway.topstepx.com/api/Auth/loginKey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ userName: username, apiKey }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      console.error('ProjectX auth error:', r.status, data);
+      return res.status(r.status).json({ error: data?.message || `Auth failed: ${r.status}` });
+    }
+    const token = data.token || data.accessToken || data.jwt || data.data?.token;
+    if (!token) {
+      console.error('ProjectX: no token in response', data);
+      return res.status(502).json({ error: 'No token in ProjectX response', raw: data });
+    }
+    res.json({ token, expiresAt: Date.now() + 23 * 60 * 60 * 1000 });
+  } catch (err) {
+    console.error('ProjectX token error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projectx/validate', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'token is required' });
+    const r = await fetch('https://gateway.topstepx.com/api/Auth/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ token }),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data?.message || `Validate failed: ${r.status}` });
+    const newToken = data.token || data.accessToken || data.jwt || data.data?.token || token;
+    res.json({ token: newToken, expiresAt: Date.now() + 23 * 60 * 60 * 1000 });
+  } catch (err) {
+    console.error('ProjectX validate error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── TRADING BUDDY ─────────────────────────────────────────────────────────────
 
 const TRADING_BUDDY_SYSTEM = `You are the Axiom Trading Buddy — a sharp, experienced futures trader and desk partner using the Market Stalkers (MS) methodology. You are sitting alongside the trader during their live session.
