@@ -311,7 +311,7 @@ function InstrumentPanel({ data, onLogSetup }) {
   );
 }
 
-export default function SetupMonitor({ onLogSetup }) {
+export default function SetupMonitor({ onLogSetup, symbolLivePrices, pxConnected }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -321,7 +321,16 @@ export default function SetupMonitor({ onLogSetup }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/setup-monitor`);
+      // Build live price query params from ProjectX when connected
+      const lp = symbolLivePrices || {};
+      const lpParams = [
+        lp.ES ? `liveES=${lp.ES}` : "",
+        lp.NQ ? `liveNQ=${lp.NQ}` : "",
+        lp.GC ? `liveGC=${lp.GC}` : "",
+        lp.CL ? `liveCL=${lp.CL}` : "",
+      ].filter(Boolean).join("&");
+      const url = `${BACKEND_URL}/api/setup-monitor${lpParams ? `?${lpParams}` : ""}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -348,7 +357,10 @@ export default function SetupMonitor({ onLogSetup }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.08em" }}>SETUP MONITOR</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", background: "rgba(246,201,14,0.12)", padding: "2px 6px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>⚠ 15-MIN DELAYED</span>
+          {pxConnected
+            ? <span style={{ fontSize: 7, fontWeight: 700, color: "#00d4aa", background: "rgba(0,212,170,0.12)", padding: "2px 6px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>● LIVE</span>
+            : <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", background: "rgba(246,201,14,0.12)", padding: "2px 6px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>⚠ 15-MIN DELAYED</span>
+          }
           {lastUpdated && (
             <span style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>
               {lastUpdated.toLocaleTimeString()}

@@ -623,6 +623,13 @@ export default function Terminal() {
   const { market, marketStatus }                   = useLiveMarket();
   const macroLive                                  = useLiveMacro();
   const { connected: pxConnected, livePrices, login: pxLogin, logout: pxLogout, reconnect: pxReconnect } = useProjectX();
+  // Map from simple symbol → live price for easy prop-passing
+  const symbolLivePrices = {
+    ES: livePrices[CONTRACT_IDS.ES],
+    NQ: livePrices[CONTRACT_IDS.NQ],
+    GC: livePrices[CONTRACT_IDS.GC],
+    CL: livePrices[CONTRACT_IDS.CL],
+  };
   const [activeTab, setActiveTab] = useState("MARKETS");
   const [pendingJournalEntry, setPendingJournalEntry] = useState(null);
 
@@ -671,7 +678,7 @@ export default function Terminal() {
         {activeTab === "AXIOM EDGE" ? (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, flex: 1, minHeight: 0 }}>
             <Panel title="Axiom Edge" badge="PB1 · PB2 · PB3 · PB4" style={{ minHeight: 600 }}>
-              <SignalsPanel externalPrefill={pendingJournalEntry} onClearExternalPrefill={() => setPendingJournalEntry(null)} />
+              <SignalsPanel externalPrefill={pendingJournalEntry} onClearExternalPrefill={() => setPendingJournalEntry(null)} symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />
             </Panel>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <Panel title="News Feed" badge={newsStatus === "live" ? `${news.length} stories · LIVE` : `${news.length} stories`} style={{ flex: 1 }}>
@@ -683,9 +690,9 @@ export default function Terminal() {
             </div>
           </div>
         ) : activeTab === "SETUPS" ? (
-          <SetupMonitor onLogSetup={handleLogSetup} />
+          <SetupMonitor onLogSetup={handleLogSetup} symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />
         ) : activeTab === "SESSION BIAS" ? (
-          <SessionBias />
+          <SessionBias symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />
         ) : activeTab === "BUDDY" ? (
           <TradingBuddy livePrice={livePrices[CONTRACT_IDS.ES]} pxConnected={pxConnected} />
         ) : (

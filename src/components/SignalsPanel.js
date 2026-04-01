@@ -556,7 +556,7 @@ function FailedPlaybooks({ items }) {
 }
 
 // ── AUTO SIGNAL ENGINE ───────────────────────────────────────────────────────
-function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoaded, onLogSignal }) {
+function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoaded, onLogSignal, symbolLivePrices, pxConnected }) {
   const [result, setResult] = useState(null);
   const [dataUsed, setDataUsed] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -568,7 +568,8 @@ function AutoSignalEngine({ selectedInstrument, onInstrumentChange, onZonesLoade
   const fetchSignal = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`${BACKEND_URL}/api/autosignal?symbol=${selectedInstrument}`);
+      const lp = pxConnected && symbolLivePrices?.[selectedInstrument];
+      const r = await fetch(`${BACKEND_URL}/api/autosignal?symbol=${selectedInstrument}${lp ? `&livePrice=${lp}` : ""}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setDataUsed(d.data_used || null);
@@ -1920,7 +1921,7 @@ function AlertBanner({ alerts, onDismiss, onClearAll }) {
 }
 
 // ── MULTI-INSTRUMENT SCANNER ──────────────────────────────────────────────────
-function InstrumentScanner() {
+function InstrumentScanner({ symbolLivePrices, pxConnected }) {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1933,7 +1934,14 @@ function InstrumentScanner() {
     setLoading(true); setError(null);
     setScanProgress("Scanning ES\u2026 NQ\u2026 DAX\u2026 XAU\u2026 OIL\u2026");
     try {
-      const r = await fetch(`${BACKEND_URL}/api/scanner`);
+      const lp = (pxConnected && symbolLivePrices) ? symbolLivePrices : {};
+      const lpParams = [
+        lp.ES ? `liveES=${lp.ES}` : "",
+        lp.NQ ? `liveNQ=${lp.NQ}` : "",
+        lp.GC ? `liveGC=${lp.GC}` : "",
+        lp.CL ? `liveCL=${lp.CL}` : "",
+      ].filter(Boolean).join("&");
+      const r = await fetch(`${BACKEND_URL}/api/scanner${lpParams ? `?${lpParams}` : ""}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setResults(d.results);
@@ -2346,7 +2354,7 @@ function TradeJournal({ prefill, onClearPrefill, externalPrefill, onClearExterna
 }
 
 // ── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function SignalsPanel({ externalPrefill, onClearExternalPrefill }) {
+export default function SignalsPanel({ externalPrefill, onClearExternalPrefill, symbolLivePrices, pxConnected }) {
   const [mode, setMode] = useState("auto");
   const [selectedInstrument, setSelectedInstrument] = useState("ES");
   const [chartData, setChartData] = useState(null);
@@ -2425,8 +2433,8 @@ export default function SignalsPanel({ externalPrefill, onClearExternalPrefill }
 
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} onZonesLoaded={zoneAlerts.setZones} onLogSignal={handleLogSignal} />}
-        {mode === "scanner" && <InstrumentScanner />}
+        {mode === "auto" && <AutoSignalEngine selectedInstrument={selectedInstrument} onInstrumentChange={setSelectedInstrument} onZonesLoaded={zoneAlerts.setZones} onLogSignal={handleLogSignal} symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />}
+        {mode === "scanner" && <InstrumentScanner symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />}
         {mode === "chart" && <ChartAnalyser onAutoFill={handleChartAutoFill} />}
         {mode === "ai" && <AISignalAnalyser chartData={chartData} onZonesLoaded={zoneAlerts.setZones} />}
         {mode === "calc" && <ATRCalculator />}

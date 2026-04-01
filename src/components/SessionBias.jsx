@@ -108,23 +108,25 @@ function VaOpenChip({ vaOpen }) {
 
 // ── Context snapshot ──────────────────────────────────────────────────────────
 
-function ContextPanel({ ctx }) {
+function ContextPanel({ ctx, livePrice, pxConnected }) {
   if (!ctx) return null;
   const trendColor = ctx.trend === "UP" ? "#00d4aa" : ctx.trend === "DOWN" ? "#ff4d6d" : "#f6c90e";
+  const displayPrice = (pxConnected && livePrice) ? livePrice : ctx.current_price;
+  const priceSource = (pxConnected && livePrice) ? "PROJECTX" : ctx.price_source?.toUpperCase();
   return (
     <div style={{ background: "rgba(10,14,26,0.85)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "12px 14px" }}>
       {/* Price row */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <span style={{ fontSize: 22, fontWeight: 700, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>
-          {ctx.currentPrice?.toFixed(2)}
+          {displayPrice?.toFixed(2)}
         </span>
         <GapBadge gap={ctx.gap} gapPct={ctx.gap_pct} />
         <VaOpenChip vaOpen={ctx.va_open} />
         <span style={{ fontSize: 8, fontWeight: 700, color: trendColor, background: `${trendColor}18`, padding: "1px 6px", borderRadius: 3, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>
           TREND {ctx.trend}
         </span>
-        <span style={{ fontSize: 8, color: "#475569", fontFamily: "'IBM Plex Mono', monospace", marginLeft: "auto" }}>
-          src: {ctx.price_source?.toUpperCase()}
+        <span style={{ fontSize: 8, color: pxConnected && livePrice ? "#00d4aa" : "#475569", fontFamily: "'IBM Plex Mono', monospace", marginLeft: "auto" }}>
+          src: {priceSource}
         </span>
       </div>
 
@@ -511,18 +513,19 @@ function AgentError({ agentKey, message }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function SessionBias() {
+export default function SessionBias({ symbolLivePrices, pxConnected }) {
   const [symbol, setSymbol] = useState("ES");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError] = useState(null);
 
-  const fetchBias = useCallback(async (sym) => {
+  const fetchBias = useCallback(async (sym, livePrice) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/session-bias?symbol=${sym}`);
+      const lpParam = livePrice ? `&livePrice=${livePrice}` : "";
+      const res = await fetch(`${BACKEND_URL}/api/session-bias?symbol=${sym}${lpParam}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error || "API error");
@@ -535,8 +538,11 @@ export default function SessionBias() {
     }
   }, []);
 
-  // Fetch on mount
-  useEffect(() => { fetchBias(symbol); }, [fetchBias, symbol]);
+  // Fetch on mount / symbol change — pass live price if available
+  useEffect(() => {
+    const lp = symbolLivePrices?.[symbol];
+    fetchBias(symbol, lp);
+  }, [fetchBias, symbol, symbolLivePrices, pxConnected]);
 
   const agents = data?.agents || {};
   const synthesis = data?.synthesis || null;
@@ -560,6 +566,10 @@ export default function SessionBias() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.08em" }}>SESSION BIAS</span>
           <span style={{ fontSize: 8, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>4-AGENT SYNTHESIS</span>
+          {pxConnected
+            ? <span style={{ fontSize: 7, fontWeight: 700, color: "#00d4aa", background: "rgba(0,212,170,0.12)", padding: "1px 6px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>● LIVE</span>
+            : <span style={{ fontSize: 7, fontWeight: 700, color: "#f6c90e", background: "rgba(246,201,14,0.12)", padding: "1px 6px", borderRadius: 2, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.04em" }}>DELAYED</span>
+          }
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -587,7 +597,7 @@ export default function SessionBias() {
             </span>
           )}
           <button
-            onClick={() => fetchBias(symbol)}
+            onClick={() => fetchBias(symbol, symbolLivePrices?.[symbol])}
             disabled={loading}
             style={{ fontSize: 9, color: "#4a9eff", background: "none", border: "1px solid rgba(74,158,255,0.2)", borderRadius: 3, padding: "2px 8px", cursor: loading ? "wait" : "pointer", fontFamily: "'IBM Plex Mono', monospace", opacity: loading ? 0.5 : 1 }}
           >{loading ? "⟳ …" : "↻ REFRESH"}</button>
@@ -598,6 +608,15 @@ export default function SessionBias() {
       {error && (
         <div style={{ background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.2)", borderRadius: 6, padding: "6px 10px", fontSize: 10, color: "#ff4d6d", fontFamily: "'IBM Plex Mono', monospace" }}>
           ✕ {error}
+        </div>
+      )}
+
+      {/* ── Live price preview (shows before first fetch completes) ── */}
+      {!data && pxConnected && symbolLivePrices?.[symbol] && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", background: "rgba(0,212,170,0.06)", border: "1px solid rgba(0,212,170,0.15)", borderRadius: 6 }}>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>{symbolLivePrices[symbol].toFixed(2)}</span>
+          <span style={{ fontSize: 8, color: "#00d4aa", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em" }}>● LIVE · {symbol}</span>
+          <span style={{ fontSize: 9, color: "#475569", fontFamily: "'IBM Plex Mono', monospace", marginLeft: "auto" }}>loading analysis…</span>
         </div>
       )}
 
@@ -622,7 +641,7 @@ export default function SessionBias() {
       {data && (
         <>
           {/* Context snapshot */}
-          <ContextPanel ctx={ctx} />
+          <ContextPanel ctx={ctx} livePrice={symbolLivePrices?.[symbol]} pxConnected={pxConnected} />
 
           {/* Refresh loading bar */}
           {loading && (
