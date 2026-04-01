@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const API_BASE = process.env.REACT_APP_API_URL || "https://axiom-terminal-production.up.railway.app";
+const LILY_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku";
 const BIAS_BORDER = { bullish: "#00d4aa", bearish: "#ff4d6d", neutral: "#f59e0b", default: "#334155" };
 const STARTERS = [
   "What's the best setup right now?",
@@ -53,7 +54,8 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const recognitionRef = useRef(null);
   const intervalRef = useRef(null);
 
-  // ElevenLabs TTS — Lily, British female neural voice
+  // Lily — ElevenLabs British female, called directly from browser
+  // (Railway IP gets flagged by ElevenLabs free tier proxy detection)
   const speak = useCallback(async (text) => {
     if (!voiceEnabled) return;
     try {
@@ -66,29 +68,38 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         .trim()
         .substring(0, 1000);
 
-      const response = await fetch(`${API_BASE}/api/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: clean }),
-      });
+      const elKey = localStorage.getItem("elevenlabs_key");
 
-      if (!response.ok) {
-        // Fallback to browser TTS
-        setSpeaking(false);
-        const utt = new SpeechSynthesisUtterance(clean);
-        utt.lang = "en-GB"; utt.rate = 0.9;
-        utt.onend = () => setSpeaking(false);
-        window.speechSynthesis?.speak(utt);
-        return;
+      if (elKey) {
+        const response = await fetch(
+          `https://api.elevenlabs.io/v1/text-to-speech/${LILY_VOICE_ID}/stream`,
+          {
+            method: "POST",
+            headers: { "xi-api-key": elKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
+            body: JSON.stringify({
+              text: clean,
+              model_id: "eleven_turbo_v2_5",
+              voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.3, use_speaker_boost: true },
+            }),
+          }
+        );
+        if (response.ok) {
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          window.__buddyAudio = audio;
+          audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); window.__buddyAudio = null; };
+          audio.onerror = () => { setSpeaking(false); URL.revokeObjectURL(url); };
+          audio.play();
+          return;
+        }
       }
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      window.__buddyAudio = audio;
-      audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); window.__buddyAudio = null; };
-      audio.onerror = () => { setSpeaking(false); URL.revokeObjectURL(url); };
-      audio.play();
+      // Fallback to browser TTS
+      setSpeaking(false);
+      const utt = new SpeechSynthesisUtterance(clean);
+      utt.lang = "en-GB"; utt.rate = 0.9;
+      utt.onend = () => setSpeaking(false);
+      window.speechSynthesis?.speak(utt);
     } catch { setSpeaking(false); }
   }, [voiceEnabled]);
 
@@ -194,10 +205,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         <BiasChip bias={sessionContext.sessionBias} />
         <CtxPill label="DAY" value={sessionContext.dayType} />
         <CtxPill label="PRICE" value={sessionContext.currentPrice} color="#e2e8f0" />
-        {pxConnected
-          ? <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#00d4aa", background:"rgba(0,212,170,0.1)", border:"1px solid rgba(0,212,170,0.25)", borderRadius:3, padding:"2px 6px" }}>LIVE</span>
-          : <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#f59e0b", background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.2)", borderRadius:3, padding:"2px 6px" }}>DELAYED</span>
-        }
+        {pxConnected ? <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#00d4aa", background:"rgba(0,212,170,0.1)", border:"1px solid rgba(0,212,170,0.25)", borderRadius:3, padding:"2px 6px" }}>LIVE</span> : <span style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#f59e0b", background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.2)", borderRadius:3, padding:"2px 6px" }}>DELAYED</span>}
         <CtxPill label="VAH" value={sessionContext.vah} color="#4a9eff" />
         <CtxPill label="POC" value={sessionContext.poc} color="#a78bfa" />
         <CtxPill label="VAL" value={sessionContext.val} color="#4a9eff" />
