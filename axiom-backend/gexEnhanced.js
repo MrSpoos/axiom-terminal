@@ -43,7 +43,7 @@ module.exports = function registerGexEnhanced(app, ANTHROPIC_KEY) {
   //   "net_gex": 2500000000,
   //   "regime": "positive"
   // }
-  app.post('/api/gex-webhook', (req, res) => {
+  app.post('/api/gex-webhook', async (req, res) => {
     const secret = process.env.GEX_WEBHOOK_SECRET;
     const body   = req.body;
 
@@ -52,20 +52,30 @@ module.exports = function registerGexEnhanced(app, ANTHROPIC_KEY) {
       return res.status(401).json({ error: 'Invalid webhook secret' });
     }
 
-    const data = {
-      symbol:      body.symbol || 'ES',
-      gamma_flip:  parseFloat(body.gamma_flip)  || null,
-      call_wall:   parseFloat(body.call_wall)   || null,
-      put_wall:    parseFloat(body.put_wall)    || null,
-      hvl:         parseFloat(body.hvl)         || null,
-      net_gex:     parseFloat(body.net_gex)     || null,
-      regime:      body.regime || null,
-      raw:         body,
-    };
+    const hasGexData = body.gamma_flip || body.call_wall || body.put_wall;
 
-    gexStore.webhook = { data, ts: Date.now() };
-    console.log(`GEX webhook received: ${data.symbol} flip=${data.gamma_flip} call_wall=${data.call_wall} put_wall=${data.put_wall}`);
-    res.json({ success: true, received: data });
+    if (hasGexData) {
+      // Full GEX payload from TradingView indicator (TanukiTrade PRO etc.)
+      const data = {
+        symbol:      body.symbol || 'ES',
+        gamma_flip:  parseFloat(body.gamma_flip)  || null,
+        call_wall:   parseFloat(body.call_wall)   || null,
+        put_wall:    parseFloat(body.put_wall)    || null,
+        hvl:         parseFloat(body.hvl)         || null,
+        net_gex:     parseFloat(body.net_gex)     || null,
+        regime:      body.regime || null,
+        raw:         body,
+      };
+      gexStore.webhook = { data, ts: Date.now() };
+      console.log(`GEX webhook (full): flip=${data.gamma_flip} call=${data.call_wall} put=${data.put_wall}`);
+      res.json({ success: true, mode: 'full', received: data });
+    } else {
+      // Heartbeat trigger from TradingView — fire FlashAlpha pull immediately
+      console.log(`GEX webhook (trigger): firing FlashAlpha pull...`);
+      res.json({ success: true, mode: 'trigger', message: 'FlashAlpha pull triggered' });
+      // Pull asynchronously so we don't block the response
+      fetchFlashAlpha().catch(err => console.warn('Triggered FlashAlpha pull failed:', err.message));
+    }
   });
 
   // ── GET /api/gex-webhook/status ───────────────────────────────────────────
