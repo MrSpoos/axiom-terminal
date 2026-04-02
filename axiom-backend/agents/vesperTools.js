@@ -1,63 +1,182 @@
 // ── Vesper Agent Tools ────────────────────────────────────────────────────────
 const fetch = require('node-fetch');
-const { runMacroAgent }       = require('./macroAgent');
-const { runCorrelationAgent } = require('./correlationAgent');
-const { runSessionAgent }     = require('./sessionAgent');
-const { runTrapAgent }        = require('./trapAgent');
+const { runMacroAgent }          = require('./macroAgent');
+const { runCorrelationAgent }    = require('./correlationAgent');
+const { runSessionAgent }        = require('./sessionAgent');
+const { runTrapAgent }           = require('./trapAgent');
+const { runDevilsAdvocateAgent } = require('./devilsAdvocateAgent');
+const { runBearCaseAgent }       = require('./bearCaseAgent');
+const { runArbiterAgent }        = require('./arbiterAgent');
 
 const VESPER_TOOLS = [
   {
+    name: 'run_full_analysis',
+    description: `Runs the complete 7-agent analysis suite and returns a synthesised verdict.
+Use this for ANY broad market question: "assess the market", "what's your read", "should I take this trade", "give me your honest view", "what's the bias", "where are we".
+Runs in sequence: Macro → Correlation → Session → Trap (Tier 1), then Devil's Advocate + Bear Case (Tier 2), then Probability Arbiter (Tier 3).
+Returns: bull/bear probability split, alert gate (alert/monitor/suppress), the contrarian stress test verdict, an independent bear case, and a one-paragraph synthesis.
+This is the definitive assessment tool — use it whenever a comprehensive view is needed.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'], description: 'The futures instrument to analyse.' },
+      },
+      required: ['instrument'],
+    },
+  },
+  {
     name: 'run_macro_agent',
-    description: 'Fetches the economic calendar and assesses macro/catalyst risk for the next 48 hours. Use when the trader asks about news risk, upcoming events, whether it is safe to trade, or when a setup might be invalidated by a scheduled release.',
+    description: 'Checks the economic calendar for event risk in the next 48 hours. Use for specific questions about news risk, upcoming releases, or whether the calendar is clear.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'run_correlation_agent',
-    description: 'Fetches DXY, VIX, and ZN (10yr Treasury) and assesses inter-market alignment for a given instrument. Use when assessing whether macro tailwinds or headwinds support or contradict a directional bias.',
+    description: 'Checks DXY, VIX, and ZN (10yr Treasury) inter-market alignment. Use for specific questions about dollar strength, fear index, or bond market direction.',
     input_schema: {
       type: 'object',
       properties: {
-        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'], description: 'The futures instrument to assess.' },
+        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'] },
       },
       required: ['instrument'],
     },
   },
   {
     name: 'run_session_agent',
-    description: 'Classifies the current trading session: day type in progress (trend/normal/neutral), Initial Balance status, value area position (above VAH / inside VA / below VAL), and overnight context. Use when assessing session character, IB formation, or what kind of day is developing.',
+    description: 'Classifies day type in progress, IB status, and value area position. Use for specific questions about session character, IB formation, or what kind of day is developing.',
     input_schema: {
       type: 'object',
       properties: {
-        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'], description: 'The futures instrument to assess.' },
+        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'] },
       },
       required: ['instrument'],
     },
   },
   {
     name: 'run_trap_agent',
-    description: 'Identifies stop hunts, liquidity grabs, bull traps, bear traps, and false breakouts using structural levels (prior day high/low, overnight extremes, IB levels, value area). Use when the trader asks if a move is real or a trap, or when price is approaching a known stop cluster zone.',
+    description: 'Identifies stop hunts, liquidity grabs, bull traps, and bear traps. Use for specific questions about whether a move is real or a trap.',
     input_schema: {
       type: 'object',
       properties: {
-        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'], description: 'The futures instrument to assess.' },
+        instrument: { type: 'string', enum: ['ES', 'NQ', 'GC', 'CL'] },
       },
       required: ['instrument'],
     },
   },
   {
     name: 'get_market_snapshot',
-    description: 'Gets live prices for ES, NQ, GC, CL, VIX, and ETFs. Use when you need current price levels or want to reference where instruments are trading right now.',
+    description: 'Gets live prices for ES, NQ, GC, CL, and VIX. Use for quick price checks.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'get_news_feed',
-    description: 'Fetches the latest market news headlines. Use when the trader asks about what is moving the market, recent headlines, or breaking news context.',
+    description: 'Fetches the latest market headlines. Use when asked about news or what is moving the market.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
 ];
 
 async function executeTool(toolName, toolInput, anthropicKey, backendUrl) {
   switch (toolName) {
+
+    case 'run_full_analysis': {
+      const instrument = toolInput.instrument || 'ES';
+
+      // Tier 1 — all four in parallel
+      const [macroR, corrR, sessionR, trapR] = await Promise.allSettled([
+        runMacroAgent(anthropicKey),
+        runCorrelationAgent(instrument, anthropicKey),
+        runSessionAgent(instrument, null, anthropicKey),
+        runTrapAgent(instrument, null, anthropicKey),
+      ]);
+
+      const tier1 = {
+        macro:       macroR.status   === 'fulfilled' ? macroR.value   : { error: macroR.reason?.message },
+        correlation: corrR.status    === 'fulfilled' ? corrR.value    : { error: corrR.reason?.message },
+        session:     sessionR.status === 'fulfilled' ? sessionR.value : { error: sessionR.reason?.message },
+        trap:        trapR.status    === 'fulfilled' ? trapR.value    : { error: trapR.reason?.message },
+      };
+
+      // Tier 2 — opposition layer in parallel
+      const [daR, bcR] = await Promise.allSettled([
+        runDevilsAdvocateAgent(instrument, tier1, anthropicKey),
+        runBearCaseAgent(instrument, tier1, anthropicKey),
+      ]);
+
+      const tier2 = {
+        devilsAdvocate: daR.status === 'fulfilled' ? daR.value : { error: daR.reason?.message },
+        bearCase:       bcR.status === 'fulfilled' ? bcR.value : { error: bcR.reason?.message },
+      };
+
+      // Tier 3 — Arbiter synthesises everything
+      const allResults = { ...tier1, ...tier2 };
+      let arbiter;
+      try {
+        arbiter = await runArbiterAgent(instrument, allResults, anthropicKey);
+      } catch (err) {
+        arbiter = { error: err.message };
+      }
+
+      // Return a compact but complete summary for Vesper to synthesise
+      return JSON.stringify({
+        instrument,
+        arbiter_verdict: {
+          bull_pct:           arbiter?.bull_pct,
+          bear_pct:           arbiter?.bear_pct,
+          alert_gate:         arbiter?.alert_gate,
+          confidence_tier:    arbiter?.confidence_tier,
+          dominant_narrative: arbiter?.dominant_narrative,
+          synthesis:          arbiter?.synthesis,
+          veto_applied:       arbiter?.veto_applied,
+          veto_reason:        arbiter?.veto_reason,
+          key_factors:        arbiter?.key_factors,
+        },
+        macro: {
+          event_risk_level: tier1.macro?.event_risk_level,
+          setup_verdict:    tier1.macro?.setup_verdict,
+          next_event:       tier1.macro?.next_event,
+          thesis:           tier1.macro?.thesis,
+        },
+        correlation: {
+          alignment:       tier1.correlation?.alignment,
+          tailwind_score:  tier1.correlation?.tailwind_score,
+          dxy_trend:       tier1.correlation?.readings?.dxy_trend,
+          vix_level:       tier1.correlation?.readings?.vix_level,
+          bonds_trend:     tier1.correlation?.readings?.bonds_trend,
+          thesis:          tier1.correlation?.thesis,
+        },
+        session: {
+          day_type:        tier1.session?.day_type_in_progress,
+          value_position:  tier1.session?.value_position,
+          ib_formed:       tier1.session?.ib_status?.formed,
+          ib_high:         tier1.session?.ib_status?.ib_high,
+          ib_low:          tier1.session?.ib_status?.ib_low,
+          ib_extension:    tier1.session?.ib_status?.extension,
+          thesis:          tier1.session?.thesis,
+        },
+        trap: {
+          trap_risk:    tier1.trap?.trap_risk,
+          trap_type:    tier1.trap?.trap_type,
+          key_levels:   tier1.trap?.key_levels_at_risk,
+          thesis:       tier1.trap?.thesis,
+        },
+        devils_advocate: {
+          verdict:             tier2.devilsAdvocate?.verdict,
+          stress_score:        tier2.devilsAdvocate?.stress_score,
+          weakest_link:        tier2.devilsAdvocate?.weakest_link,
+          failure_scenarios:   tier2.devilsAdvocate?.failure_scenarios?.slice(0, 2),
+          invalidation_levels: tier2.devilsAdvocate?.invalidation_levels,
+          summary:             tier2.devilsAdvocate?.summary,
+        },
+        bear_case: {
+          quality:          tier2.bearCase?.bear_case_quality,
+          primary_driver:   tier2.bearCase?.primary_driver,
+          trigger_catalyst: tier2.bearCase?.trigger_catalyst,
+          target_levels:    tier2.bearCase?.target_levels,
+          summary:          tier2.bearCase?.summary,
+        },
+        timestamp: new Date().toISOString(),
+      }, null, 2);
+    }
+
     case 'run_macro_agent': {
       const r = await runMacroAgent(anthropicKey);
       return JSON.stringify(r, null, 2);
@@ -85,7 +204,9 @@ async function executeTool(toolName, toolInput, anthropicKey, backendUrl) {
       const r = await fetch(`${backendUrl}/api/news`);
       const d = await r.json();
       if (!d.success) return 'News unavailable';
-      return (d.data || []).slice(0, 8).map(n => `[${n.impact?.toUpperCase()}] ${n.source} — ${n.headline}`).join('\n');
+      return (d.data || []).slice(0, 8).map(n =>
+        `[${n.impact?.toUpperCase()}] ${n.source} — ${n.headline}`
+      ).join('\n');
     }
     default:
       return `Unknown tool: ${toolName}`;
