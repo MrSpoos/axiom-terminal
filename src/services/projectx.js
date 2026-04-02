@@ -5,11 +5,15 @@ const API_BASE = process.env.REACT_APP_API_URL || "https://axiom-terminal-produc
 const JWT_KEY = "projectx_jwt";
 const EXP_KEY = "projectx_jwt_exp";
 
+// ── Contract IDs — update each quarterly roll ──────────────────────────────
+// Month codes: F=Jan G=Feb H=Mar J=Apr K=May M=Jun N=Jul Q=Aug U=Sep V=Oct X=Nov Z=Dec
+// Current front months as of April 2026:
+//   ES/NQ/GC → June 2026 (M26) | CL → May 2026 (K26, crude rolls monthly)
 export const CONTRACT_IDS = {
-  ES: "CON.F.US.EP.M25",
-  NQ: "CON.F.US.ENQ.M25",
-  GC: "CON.F.US.GC.M25",
-  CL: "CON.F.US.CL.M25",
+  ES: "CON.F.US.EP.M26",
+  NQ: "CON.F.US.ENQ.M26",
+  GC: "CON.F.US.GC.M26",
+  CL: "CON.F.US.CL.K26",
 };
 
 class ProjectXService {
