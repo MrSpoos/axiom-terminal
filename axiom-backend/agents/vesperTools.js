@@ -72,6 +72,11 @@ This is the definitive assessment tool — use it whenever a comprehensive view 
     description: 'Fetches the latest market headlines. Use when asked about news or what is moving the market.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
+  {
+    name: 'run_gex_agent',
+    description: 'Fetches live Gamma Exposure (GEX) levels: gamma flip point, call wall, put wall, HVL, net GEX, and dealer regime (positive/negative gamma). Use when asked about gamma levels, dealer positioning, options-driven support/resistance, or whether the market is in a pinning or amplifying regime. Also use when assessing whether a key level has gamma significance.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
 ];
 
 async function executeTool(toolName, toolInput, anthropicKey, backendUrl) {
@@ -207,6 +212,42 @@ async function executeTool(toolName, toolInput, anthropicKey, backendUrl) {
       return (d.data || []).slice(0, 8).map(n =>
         `[${n.impact?.toUpperCase()}] ${n.source} — ${n.headline}`
       ).join('\n');
+    }
+    case 'run_gex_agent': {
+      // Try enhanced (TradingView webhook / FlashAlpha) first, fall back to Yahoo engine
+      const enhanced = await fetch(`${backendUrl}/api/gex/enhanced`);
+      const eData = await enhanced.json();
+      if (eData.success) {
+        return JSON.stringify({
+          source:      eData._source,
+          last_update: eData._ts ? new Date(eData._ts).toISOString() : null,
+          gamma_flip:  eData.gamma_flip,
+          call_wall:   eData.call_wall,
+          put_wall:    eData.put_wall,
+          hvl:         eData.hvl || null,
+          net_gex:     eData.net_gex,
+          regime:      eData.regime,
+          nq_gamma_flip: eData.nq_gamma_flip || null,
+          nq_call_wall:  eData.nq_call_wall  || null,
+          nq_put_wall:   eData.nq_put_wall   || null,
+        }, null, 2);
+      }
+      // Fallback to Yahoo/Black-Scholes engine
+      const fallback = await fetch(`${backendUrl}/api/gex`);
+      const fData = await fallback.json();
+      if (!fData.success) return 'GEX data unavailable';
+      const g = fData.data;
+      return JSON.stringify({
+        source:     'yahoo_bs_engine',
+        gamma_flip: g.es?.flipPoint  || g.flipPoint,
+        call_wall:  g.es?.callWall   || g.callWall,
+        put_wall:   g.es?.putWall    || g.putWall,
+        net_gex:    g.es?.netGex     || g.netGex,
+        regime:     g.es?.regime     || g.regime,
+        nq_gamma_flip: g.nq?.flipPoint || null,
+        nq_call_wall:  g.nq?.callWall  || null,
+        nq_put_wall:   g.nq?.putWall   || null,
+      }, null, 2);
     }
     default:
       return `Unknown tool: ${toolName}`;

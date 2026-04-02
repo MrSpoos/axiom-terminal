@@ -3830,6 +3830,9 @@ require('./agents')(app);
 
 
 
+// ── GEX Enhanced (TradingView webhook + FlashAlpha) ──────────────────────────
+require('./gexEnhanced')(app, ANTHROPIC_KEY);
+
 // ── Trade Review + Vesper Debrief ─────────────────────────────────────────────
 require('./tradeReview')(app, ANTHROPIC_KEY);
 
