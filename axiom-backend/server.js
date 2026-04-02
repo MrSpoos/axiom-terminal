@@ -3833,6 +3833,9 @@ require('./agents')(app);
 // ── GEX Enhanced (TradingView webhook + FlashAlpha) ──────────────────────────
 require('./gexEnhanced')(app, ANTHROPIC_KEY);
 
+// ── Vesper Scheduler (pre-market brief + performance tracker) ─────────────────
+require('./vesperScheduler')(app, ANTHROPIC_KEY);
+
 // ── Trade Review + Vesper Debrief ─────────────────────────────────────────────
 require('./tradeReview')(app, ANTHROPIC_KEY);
 

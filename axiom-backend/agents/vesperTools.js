@@ -121,6 +121,23 @@ async function executeTool(toolName, toolInput, anthropicKey, backendUrl) {
       }
 
       // Return a compact but complete summary for Vesper to synthesise
+      // Fetch GEX levels (enhanced first, fallback to Yahoo engine)
+      let gexData = null;
+      try {
+        const gexR = await fetch(`${backendUrl}/api/gex/enhanced`);
+        const gexD = await gexR.json();
+        if (gexD.success) {
+          gexData = { source: gexD._source, gamma_flip: gexD.gamma_flip, call_wall: gexD.call_wall, put_wall: gexD.put_wall, regime: gexD.regime, net_gex: gexD.net_gex };
+        } else {
+          const fbR = await fetch(`${backendUrl}/api/gex`);
+          const fbD = await fbR.json();
+          if (fbD.success) {
+            const g = fbD.data;
+            gexData = { source: 'yahoo_bs', gamma_flip: g.es?.flipPoint || g.flipPoint, call_wall: g.es?.callWall || g.callWall, put_wall: g.es?.putWall || g.putWall, regime: g.es?.regime || g.regime };
+          }
+        }
+      } catch {}
+
       return JSON.stringify({
         instrument,
         arbiter_verdict: {
@@ -179,6 +196,7 @@ async function executeTool(toolName, toolInput, anthropicKey, backendUrl) {
           summary:          tier2.bearCase?.summary,
         },
         timestamp: new Date().toISOString(),
+        gex: gexData,
       }, null, 2);
     }
 

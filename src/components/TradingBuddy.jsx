@@ -73,6 +73,90 @@ function EmptyState({ onSend }) {
   </div>;
 }
 
+
+// ── Vesper Stats + Morning Brief panel ───────────────────────────────────────
+function VesperStats({ apiBase }) {
+  const [stats, setStats]   = useState(null);
+  const [brief, setBrief]   = useState(null);
+  const [open, setOpen]     = useState(false);
+  const [loading, setLoading] = useState(false);
+  const mono = "'IBM Plex Mono', monospace";
+
+  useEffect(() => {
+    // Load stats silently on mount
+    fetch(`${apiBase}/api/vesper/stats`).then(r => r.json()).then(d => { if (d.success) setStats(d.data); }).catch(() => {});
+    fetch(`${apiBase}/api/vesper/brief`).then(r => r.json()).then(d => { if (d.success) setBrief(d.data); }).catch(() => {});
+  }, [apiBase]);
+
+  const today = new Date().toISOString().split('T')[0];
+  const hasBrief = brief?.date === today;
+  const gateColor = { alert: '#4ade80', monitor: '#fbbf24', suppress: '#f87171' };
+
+  if (!hasBrief && (!stats || stats.total === 0)) return null;
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <button onClick={() => setOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(74,158,255,0.06)', border: '1px solid rgba(74,158,255,0.15)', borderRadius: 6, cursor: 'pointer' }}>
+        <span style={{ fontSize: 9, fontWeight: 700, color: '#4a9eff', fontFamily: mono, letterSpacing: '0.08em' }}>◈ VESPER INTELLIGENCE</span>
+        {hasBrief && brief.briefs?.map(b => (
+          <span key={b.instrument} style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, background: (gateColor[b.arbiter_gate] || '#94a3b8') + '18', color: gateColor[b.arbiter_gate] || '#94a3b8', fontFamily: mono }}>
+            {b.instrument} {b.bull_pct}%/{b.bear_pct}%
+          </span>
+        ))}
+        {stats?.total > 0 && <span style={{ fontSize: 9, color: '#475569', fontFamily: mono, marginLeft: 'auto' }}>accuracy: {stats.overall_accuracy}% ({stats.total} calls)</span>}
+        <span style={{ fontSize: 10, color: '#334155', marginLeft: hasBrief || stats?.total > 0 ? 0 : 'auto' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '10px 12px', background: 'rgba(5,10,25,0.8)', border: '1px solid rgba(74,158,255,0.12)', borderTop: 'none', borderRadius: '0 0 6px 6px' }}>
+          {hasBrief && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, color: '#334155', fontFamily: mono, marginBottom: 6, letterSpacing: '0.08em' }}>TODAY'S PRE-MARKET BRIEF</div>
+              {brief.briefs.map(b => (
+                <div key={b.instrument} style={{ marginBottom: 6, padding: '6px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 4, borderLeft: `2px solid ${gateColor[b.arbiter_gate] || '#475569'}` }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0', fontFamily: mono }}>{b.instrument}</span>
+                    <span style={{ fontSize: 9, color: gateColor[b.arbiter_gate] || '#94a3b8', fontFamily: mono }}>{(b.arbiter_gate || '').toUpperCase()}</span>
+                    <span style={{ fontSize: 9, color: '#4ade80', fontFamily: mono }}>Bull {b.bull_pct}%</span>
+                    <span style={{ fontSize: 9, color: '#f87171', fontFamily: mono }}>Bear {b.bear_pct}%</span>
+                    {b.gex_flip && <span style={{ fontSize: 9, color: '#a78bfa', fontFamily: mono }}>GEX flip: {b.gex_flip}</span>}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.5 }}>{b.synthesis}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {stats?.total > 0 && (
+            <div>
+              <div style={{ fontSize: 9, color: '#334155', fontFamily: mono, marginBottom: 6, letterSpacing: '0.08em' }}>PREDICTION ACCURACY</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 8 }}>
+                {[
+                  { label: 'OVERALL', value: `${stats.overall_accuracy}%`, color: stats.overall_accuracy >= 55 ? '#4ade80' : '#f87171' },
+                  { label: 'RECENT 10', value: `${stats.recent_accuracy}%`, color: stats.recent_accuracy >= 55 ? '#4ade80' : '#fbbf24' },
+                  { label: 'TOTAL CALLS', value: stats.total, color: '#94a3b8' },
+                ].map(s => (
+                  <div key={s.label} style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 4, padding: '5px 8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 8, color: '#475569', fontFamily: mono, marginBottom: 2 }}>{s.label}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: s.color, fontFamily: mono }}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+              {Object.keys(stats.by_instrument || {}).length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {Object.entries(stats.by_instrument).map(([sym, d]) => (
+                    <span key={sym} style={{ fontSize: 9, fontFamily: mono, padding: '2px 8px', borderRadius: 3, background: 'rgba(255,255,255,0.04)', color: '#94a3b8' }}>
+                      {sym}: {d.accuracy}% ({d.total})
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TradingBuddy({ livePrice, pxConnected }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -271,6 +355,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         <CtxPill label="VIX" value={sessionContext.vix} color={sessionContext.vix>20?"#ff4d6d":"#94a3b8"} />
         {sessionContext.gap!=null && <CtxPill label="GAP" value={sessionContext.gap>0?`+${sessionContext.gap}`:sessionContext.gap} color={sessionContext.gap>0?"#00d4aa":"#ff4d6d"} />}
       </div>
+      <VesperStats apiBase={API_BASE} />
       <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 8px", display:"flex", flexDirection:"column" }}>
         {messages.length===0 && !loading ? <EmptyState onSend={send} /> : <>
           {messages.map((msg,i) => msg.role==="user" ? <UserBubble key={i} msg={msg}/> : msg.role==="error" ? <ErrorBubble key={i} msg={msg}/> : <VesperBubble key={i} msg={msg} biasBorder={biasBorder}/>)}

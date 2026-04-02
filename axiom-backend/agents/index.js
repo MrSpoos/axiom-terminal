@@ -245,6 +245,7 @@ SPECIALIST TOOLS (use for specific targeted questions only):
 - get_market_snapshot → live prices for all instruments
 - get_news_feed → latest market headlines
 - run_gex_agent → live GEX levels: gamma flip, call wall, put wall, dealer regime (positive/negative gamma)
+- run_full_analysis → NOW INCLUDES GEX levels automatically in the full picture
 
 ═══ ASSESSMENT PROTOCOL — MANDATORY ═══
 When the trader asks ANY of the following, you MUST call run_full_analysis FIRST:
