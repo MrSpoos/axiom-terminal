@@ -6,6 +6,7 @@ import TradingBuddy from "./components/TradingBuddy";
 import ProjectXSetup from "./components/ProjectXSetup";
 import { useProjectX, CONTRACT_IDS } from "./services/projectx";
 import RollReminder from "./components/RollReminder";
+import AgentPanel from "./components/AgentPanel";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
@@ -777,7 +778,7 @@ export default function Terminal() {
           </div>
           <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
           <nav style={{ display: "flex", gap: 2 }}>
-            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS","SESSION BIAS","VESPER"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
+            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS","SESSION BIAS","AGENTS","VESPER"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
           </nav>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -811,6 +812,8 @@ export default function Terminal() {
           <SetupMonitor onLogSetup={handleLogSetup} symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />
         ) : activeTab === "SESSION BIAS" ? (
           <SessionBias symbolLivePrices={symbolLivePrices} pxConnected={pxConnected} />
+        ) : activeTab === "AGENTS" ? (
+          <AgentPanel symbolLivePrices={symbolLivePrices} />
         ) : activeTab === "VESPER" ? (
           <TradingBuddy livePrice={livePrices[CONTRACT_IDS.ES]} pxConnected={pxConnected} />
         ) : (
