@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { postVesperReflect } from "../services/agentService";
 
 const API_BASE = process.env.REACT_APP_API_URL || "https://axiom-terminal-production.up.railway.app";
 const LILY_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku";
@@ -30,7 +31,31 @@ function CtxPill({ label, value, color }) {
 function UserBubble({ msg }) {
   return <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:12 }}><div style={{ maxWidth:"70%" }}><div style={{ background:"#f59e0b", color:"#0a0a0f", borderRadius:"12px 12px 2px 12px", padding:"8px 12px", fontSize:12, fontFamily:"'DM Sans',sans-serif", lineHeight:1.5, fontWeight:500 }}>{msg.content}</div><div style={{ fontSize:9, color:"#334155", textAlign:"right", marginTop:3, fontFamily:"'IBM Plex Mono',monospace" }}>{msg.timestamp}</div></div></div>;
 }
+const TOOL_LABELS = { run_macro_agent:"◈ Macro Agent", run_correlation_agent:"◈ Correlation Agent", get_market_snapshot:"◈ Market Snapshot", get_news_feed:"◈ News Feed" };
 function VesperBubble({ msg, biasBorder }) {
+  return (
+    <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}>
+      <div style={{ maxWidth:"80%" }}>
+        {msg.toolCalls?.length > 0 && (
+          <div style={{ marginBottom:4, display:"flex", flexWrap:"wrap", gap:4 }}>
+            {msg.toolCalls.map((tc, i) => (
+              <span key={i} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", color:"#4a9eff", background:"rgba(74,158,255,0.08)", border:"1px solid rgba(74,158,255,0.15)", borderRadius:3, padding:"1px 6px" }}>
+                {TOOL_LABELS[tc.tool] || tc.tool}{tc.input?.instrument ? " · " + tc.input.instrument : ""}
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{ background:"#0d1117", border:"1px solid rgba(255,255,255,0.08)", borderLeft:`2px solid ${biasBorder}`, borderRadius:"2px 12px 12px 12px", padding:"10px 14px", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", color:"#cbd5e1", lineHeight:1.6 }}>
+          {renderBold(msg.content)}
+        </div>
+        <div style={{ fontSize:9, color:"#334155", marginTop:3, fontFamily:"'IBM Plex Mono',monospace" }}>
+          ◈ VESPER · {msg.timestamp}
+        </div>
+      </div>
+    </div>
+  );
+}
+) {
   return <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ maxWidth:"80%" }}><div style={{ background:"#0d1117", border:"1px solid rgba(255,255,255,0.08)", borderLeft:`2px solid ${biasBorder}`, borderRadius:"2px 12px 12px 12px", padding:"10px 14px", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", color:"#cbd5e1", lineHeight:1.6 }}>{renderBold(msg.content)}</div><div style={{ fontSize:9, color:"#334155", marginTop:3, fontFamily:"'IBM Plex Mono',monospace" }}>◈ VESPER · {msg.timestamp}</div></div></div>;
 }
 function ErrorBubble({ msg }) {
@@ -59,6 +84,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const [transcript, setTranscript] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [reflecting, setReflecting] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -162,6 +188,29 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   useEffect(() => { if (livePrice != null) setSessionContext(prev => ({ ...prev, currentPrice: livePrice })); }, [livePrice]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages, loading]);
 
+  const reflect = useCallback(async () => {
+    setReflecting(true);
+    try {
+      const outcome = prompt("What happened in the market today? (optional — press OK to skip)");
+      const history = messages.map(m => ({ role: m.role, content: m.content }));
+      const result = await postVesperReflect({
+        conversationHistory: history,
+        marketOutcome: outcome || "Not provided",
+        instrument: sessionContext.instrument || "ES",
+      });
+      const learningCount = result.newLearnings?.length || 0;
+      const ts = new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit", hour12:true });
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: `◈ Session reflection complete. ${learningCount} new insight${learningCount !== 1 ? "s" : ""} stored to memory.${result.reflection?.summary ? " " + result.reflection.summary : ""}`,
+        timestamp: ts,
+        toolCalls: [],
+      }]);
+    } catch (err) {
+      console.error("Reflect error:", err);
+    } finally { setReflecting(false); }
+  }, [messages, sessionContext]);
+
   const send = useCallback(async (text) => {
     const content = (text || input).trim();
     if (!content || loading) return;
@@ -170,7 +219,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     const newMessages = [...messages, { role:"user", content, timestamp:ts }];
     setMessages(newMessages); setLoading(true);
     try {
-      const r = await fetch(`${API_BASE}/api/trading-chat`, {
+      const r = await fetch(`${API_BASE}/api/vesper`, {
         method:"POST", headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ messages: newMessages.map(m => ({ role:m.role, content:m.content })), sessionContext }),
       });
@@ -178,6 +227,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
       const replyTs = new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit", hour12:true });
       const reply = data.reply || data.error || "No response";
       const role = data.reply ? "assistant" : "error";
+      const toolCalls = data.toolCalls || [];
       setMessages(prev => [...prev, { role, content:reply, timestamp:replyTs }]);
       if (role === "assistant") speak(reply);
     } catch (err) {
@@ -207,6 +257,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
           </button>
           <span style={{ fontSize:9, color:"#334155", fontFamily:"'IBM Plex Mono',monospace" }}>{new Date().toLocaleTimeString("en-US",{ hour:"2-digit", minute:"2-digit", timeZone:"America/New_York" })} ET</span>
           <button onClick={() => { setMessages([]); stopSpeaking(); }} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"transparent", border:"1px solid rgba(255,255,255,0.1)", color:"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>CLEAR</button>
+          <button onClick={reflect} disabled={reflecting || messages.length === 0} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:reflecting?"rgba(74,158,255,0.08)":"transparent", border:"1px solid rgba(74,158,255,0.2)", color:reflecting?"#4a9eff":"#4a9eff", borderRadius:3, padding:"3px 8px", cursor:reflecting||messages.length===0?"not-allowed":"pointer", opacity:messages.length===0?0.3:1 }}>{reflecting ? "◈ REFLECTING..." : "◈ REFLECT"}</button>
         </div>
       </div>
       <div style={{ display:"flex", flexWrap:"wrap", gap:5, padding:"8px 14px", borderBottom:"1px solid rgba(255,255,255,0.05)", background:"#080810", flexShrink:0 }}>
@@ -243,7 +294,7 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         </div>
         <button onClick={()=>send()} disabled={loading||!input.trim()||listening}
           style={{ background:loading||!input.trim()||listening?"rgba(245,158,11,0.15)":"#f59e0b", border:"none", borderRadius:8, padding:"9px 16px", color:loading||!input.trim()||listening?"#78350f":"#0a0a0f", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", letterSpacing:"0.06em", cursor:loading||!input.trim()||listening?"not-allowed":"pointer", fontWeight:600, whiteSpace:"nowrap" }}>
-          {loading?"THINKING...":"▶ SEND"}
+          {loading ? "● CONSULTING..." : "▶ SEND"}
         </button>
       </div>
       <style>{`

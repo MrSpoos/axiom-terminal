@@ -3824,3 +3824,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('');
 });
 
+
+// ── Axiom AI Agents (Phase 1: Macro + Correlation) ───────────────────────────
+require('./agents')(app);
+
