@@ -15,6 +15,23 @@ export async function fetchCorrelationAgent(instrument = 'ES') {
   return d.data;
 }
 
+export async function fetchSessionAgent(instrument = 'ES', levels = {}) {
+  const params = new URLSearchParams({ instrument, ...levels });
+  const r = await fetch(`${API_BASE}/api/agents/session?${params}`);
+  const d = await r.json();
+  if (!r.ok || !d.success) throw new Error(d.error || 'Session agent failed');
+  return d.data;
+}
+
+export async function fetchTrapAgent(instrument = 'ES', levels = {}) {
+  const params = new URLSearchParams({ instrument, ...levels });
+  const r = await fetch(`${API_BASE}/api/agents/trap?${params}`);
+  const d = await r.json();
+  if (!r.ok || !d.success) throw new Error(d.error || 'Trap agent failed');
+  return d.data;
+}
+
+// Tier 1 only (fast — for quick checks)
 export async function fetchTier1Agents(instrument = 'ES') {
   const [macroResult, corrResult] = await Promise.allSettled([
     fetchMacroAgent(),
@@ -24,6 +41,18 @@ export async function fetchTier1Agents(instrument = 'ES') {
     macro:       macroResult.status === 'fulfilled' ? macroResult.value : { error: macroResult.reason?.message },
     correlation: corrResult.status  === 'fulfilled' ? corrResult.value  : { error: corrResult.reason?.message },
   };
+}
+
+// Full 6-agent + Arbiter run (all tiers)
+export async function fetchFullAgentRun(instrument = 'ES', sessionLevels = null) {
+  const r = await fetch(`${API_BASE}/api/agents/full`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instrument, sessionLevels }),
+  });
+  const d = await r.json();
+  if (!r.ok || !d.success) throw new Error(d.error || 'Full agent run failed');
+  return d;
 }
 
 export async function fetchVesperMemory() {
