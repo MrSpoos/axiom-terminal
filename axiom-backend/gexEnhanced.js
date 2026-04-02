@@ -101,39 +101,42 @@ module.exports = function registerGexEnhanced(app, ANTHROPIC_KEY) {
     // Use nearest Friday expiry as the target
     const expiry = getNearestExpiry();
     try {
-      const [spyRes, qqqRes] = await Promise.allSettled([
-        fetch(`https://lab.flashalpha.com/v1/exposure/gex/SPY?expiration=${expiry}`, {
-          headers: { 'X-Api-Key': apiKey },
-          timeout: 10000,
-        }).then(r => r.json()),
-        fetch(`https://lab.flashalpha.com/v1/exposure/gex/QQQ?expiration=${expiry}`, {
-          headers: { 'X-Api-Key': apiKey },
-          timeout: 10000,
-        }).then(r => r.json()),
-      ]);
+      // Try SPX index first (free tier), fall back to SPY ETF (requires Basic plan)
+      // SPX is the S&P 500 index option chain — no ETF restriction
+      const tickers = [
+        { sym: 'SPX',  scale: 1,   target: 'es'  },
+        { sym: 'NDX',  scale: 1,   target: 'nq'  },
+      ];
+      const results = await Promise.allSettled(
+        tickers.map(t =>
+          fetch(`https://lab.flashalpha.com/v1/exposure/gex/${t.sym}?expiration=${expiry}`, {
+            headers: { 'X-Api-Key': apiKey }, signal: AbortSignal.timeout(10000),
+          }).then(r => r.json()).then(d => ({ ...d, _sym: t.sym, _scale: t.scale, _target: t.target }))
+        )
+      );
 
-      const spy = spyRes.status === 'fulfilled' ? spyRes.value : null;
-      const qqq = qqqRes.status === 'fulfilled' ? qqqRes.value : null;
+      const spx = results[0].status === 'fulfilled' && !results[0].value.error ? results[0].value : null;
+      const ndx = results[1].status === 'fulfilled' && !results[1].value.error ? results[1].value : null;
 
-      if (!spy && !qqq) return;
+      if (!spx && !ndx) {
+        console.warn('FlashAlpha: no usable data (free tier may not support these tickers)');
+        return;
+      }
 
-      // Scale SPY gamma flip → ES, QQQ gamma flip → NQ
-      // SPY ≈ SPX/10, ES ≈ SPX  → ES ≈ SPY × 10
-      // QQQ ≈ NDX/40 → NQ ≈ QQQ × 40
+      // SPX is already in ES-equivalent points (SPX ≈ ES)
+      // NDX is already in NQ-equivalent points (NDX ≈ NQ)
       const data = {
-        // ES levels (scaled from SPY)
-        gamma_flip: spy?.gamma_flip ? +(spy.gamma_flip * 10).toFixed(2) : null,
-        call_wall:  spy?.call_wall  ? +(spy.call_wall  * 10).toFixed(2) : null,
-        put_wall:   spy?.put_wall   ? +(spy.put_wall   * 10).toFixed(2) : null,
-        net_gex:    spy?.net_gex    || null,
-        regime:     spy?.net_gex > 0 ? 'positive' : 'negative',
-        // NQ levels (scaled from QQQ)
-        nq_gamma_flip: qqq?.gamma_flip ? +(qqq.gamma_flip * 40).toFixed(2) : null,
-        nq_call_wall:  qqq?.call_wall  ? +(qqq.call_wall  * 40).toFixed(2) : null,
-        nq_put_wall:   qqq?.put_wall   ? +(qqq.put_wall   * 40).toFixed(2) : null,
+        gamma_flip: spx?.gamma_flip ? +spx.gamma_flip.toFixed(2) : null,
+        call_wall:  spx?.call_wall  ? +spx.call_wall.toFixed(2)  : null,
+        put_wall:   spx?.put_wall   ? +spx.put_wall.toFixed(2)   : null,
+        net_gex:    spx?.net_gex    || null,
+        regime:     spx?.net_gex > 0 ? 'positive' : 'negative',
+        nq_gamma_flip: ndx?.gamma_flip ? +ndx.gamma_flip.toFixed(2) : null,
+        nq_call_wall:  ndx?.call_wall  ? +ndx.call_wall.toFixed(2)  : null,
+        nq_put_wall:   ndx?.put_wall   ? +ndx.put_wall.toFixed(2)   : null,
         expiry,
-        raw_spy: spy,
-        raw_qqq: qqq,
+        raw_spx: spx,
+        raw_ndx: ndx,
       };
 
       gexStore.flashalpha = { data, ts: Date.now() };
