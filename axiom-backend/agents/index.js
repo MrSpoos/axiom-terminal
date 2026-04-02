@@ -138,6 +138,81 @@ module.exports = function registerAgentRoutes(app) {
   });
 
 
+  // ── GET /api/agents/quick-gate?instrument=ES ─────────────────────────────
+  // Fast 2-agent check: Macro + Correlation → mini Arbiter
+  // Used by SetupMonitor to show alert_gate badge without running full suite
+  // Macro result is cached server-side for 10min to avoid redundant calls
+  let _macroCache = null;
+  let _macroCacheTs = 0;
+
+  app.get('/api/agents/quick-gate', async (req, res) => {
+    if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
+    const instrument = (req.query.instrument || 'ES').toUpperCase();
+    if (!VALID_INSTRUMENTS.includes(instrument)) return res.status(400).json({ error: 'invalid instrument' });
+    try {
+      // Use cached macro if fresh (10 min)
+      const now = Date.now();
+      if (!_macroCache || now - _macroCacheTs > 10 * 60 * 1000) {
+        _macroCache = await runMacroAgent(ANTHROPIC_KEY);
+        _macroCacheTs = now;
+      }
+      const macro = _macroCache;
+
+      // Correlation is instrument-specific, always fresh
+      const correlation = await runCorrelationAgent(instrument, ANTHROPIC_KEY);
+
+      // Hard veto: extreme event risk → always suppress
+      if (macro.event_risk_level === 'extreme' || macro.setup_verdict === 'avoid') {
+        return res.json({
+          success: true,
+          instrument,
+          alert_gate: 'suppress',
+          confidence_tier: 'low',
+          bull_pct: 50, bear_pct: 50,
+          dominant_narrative: 'contested',
+          veto_applied: true,
+          veto_reason: `Macro: ${macro.setup_verdict} — ${macro.next_event?.name || 'extreme event risk'}`,
+          synthesis: macro.thesis || 'Extreme event risk — standing aside.',
+          macro: { event_risk_level: macro.event_risk_level, setup_verdict: macro.setup_verdict, thesis: macro.thesis },
+          correlation: { alignment: correlation.alignment, tailwind_score: correlation.tailwind_score, thesis: correlation.thesis },
+          ts: new Date().toISOString(),
+        });
+      }
+
+      // Score-based gate logic (no AI call needed for quick gate)
+      const tailwind = correlation.tailwind_score ?? 0;
+      const macroBoost = macro.event_risk_level === 'none' || macro.event_risk_level === 'low' ? 10 : 0;
+      const corrPenalty = correlation.alignment === 'contradicting' ? -20 : correlation.alignment === 'neutral' ? -5 : 10;
+      const rawBull = Math.max(10, Math.min(90, 50 + tailwind / 4 + macroBoost + corrPenalty));
+      const bull_pct = Math.round(rawBull);
+      const bear_pct = 100 - bull_pct;
+      const confidence = Math.abs(tailwind) > 50 ? 'high' : Math.abs(tailwind) > 25 ? 'medium' : 'low';
+      const gate = macro.setup_verdict === 'avoid' ? 'suppress'
+        : (confidence === 'low' || Math.abs(50 - bull_pct) < 10) ? 'monitor'
+        : bull_pct >= 60 ? 'alert'
+        : bear_pct >= 60 ? 'monitor'
+        : 'monitor';
+
+      res.json({
+        success: true,
+        instrument,
+        alert_gate: gate,
+        confidence_tier: confidence,
+        bull_pct, bear_pct,
+        dominant_narrative: bull_pct > 60 ? 'bull' : bear_pct > 60 ? 'bear' : 'contested',
+        veto_applied: false,
+        veto_reason: null,
+        synthesis: `${correlation.thesis || ''} ${macro.thesis || ''}`.trim(),
+        macro: { event_risk_level: macro.event_risk_level, setup_verdict: macro.setup_verdict, thesis: macro.thesis },
+        correlation: { alignment: correlation.alignment, tailwind_score: correlation.tailwind_score, thesis: correlation.thesis },
+        ts: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('Quick gate error:', err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // ── POST /api/vesper — Agentic Vesper with full tool suite ────────────────
   app.post('/api/vesper', async (req, res) => {
     if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' });
@@ -158,6 +233,8 @@ You trade ES, NQ, GC, and CL futures using Market Stalkers (MS) methodology: Mar
 You have a full suite of specialist AI agents under your control:
 - run_macro_agent: economic calendar and event risk
 - run_correlation_agent: DXY/VIX/ZN inter-market alignment
+- run_session_agent: day type classification, IB status, value area position
+- run_trap_agent: stop hunt and liquidity grab detection
 - get_market_snapshot: live prices across instruments and VIX
 - get_news_feed: latest market headlines
 

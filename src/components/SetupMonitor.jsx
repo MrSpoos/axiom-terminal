@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
+const AGENT_URL = process.env.REACT_APP_API_URL || "https://axiom-terminal-production.up.railway.app";
 
 const OPEN_LOC_COLORS = {
   above_value: { color: "#00d4aa", bg: "rgba(0,212,170,0.12)" },
@@ -105,6 +106,38 @@ function ConvictionDetail({ conviction }) {
         <span style={{ fontSize: 8, color: "#334155", fontFamily: "'IBM Plex Mono', monospace" }}>{conviction.summary}</span>
         <span style={{ fontSize: 8, fontWeight: 700, color: cs.color, fontFamily: "'IBM Plex Mono', monospace" }}>{conviction.conviction}</span>
       </div>
+    </div>
+  );
+}
+
+
+// ── Arbiter Gate Badge ────────────────────────────────────────────────────────
+const GATE_STYLES = {
+  alert:    { color: "#4ade80", bg: "rgba(74,222,128,0.12)", border: "rgba(74,222,128,0.35)", label: "▲ ALERT",    panelBorder: "rgba(74,222,128,0.3)" },
+  monitor:  { color: "#fbbf24", bg: "rgba(251,191,36,0.10)", border: "rgba(251,191,36,0.35)", label: "◉ MONITOR",  panelBorder: "rgba(255,255,255,0.08)" },
+  suppress: { color: "#f87171", bg: "rgba(248,113,113,0.10)", border: "rgba(248,113,113,0.35)", label: "✗ SUPPRESS", panelBorder: "rgba(248,113,113,0.3)" },
+};
+
+function ArbiterBadge({ gate, bullPct, bearPct, synthesis, vetoed, vetoReason }) {
+  if (!gate) return null;
+  const s = GATE_STYLES[gate] || GATE_STYLES.monitor;
+  return (
+    <div style={{ marginBottom: 8, padding: "6px 10px", background: s.bg, border: `1px solid ${s.border}`, borderRadius: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 9, fontWeight: 700, color: s.color, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em" }}>{s.label}</span>
+        <div style={{ flex: 1, display: "flex", borderRadius: 3, overflow: "hidden", height: 5 }}>
+          <div style={{ width: `${bullPct || 50}%`, background: "#4ade80", transition: "width 0.4s" }} />
+          <div style={{ width: `${bearPct || 50}%`, background: "#f87171", transition: "width 0.4s" }} />
+        </div>
+        <span style={{ fontSize: 9, color: "#4ade80", fontFamily: "'IBM Plex Mono', monospace" }}>{bullPct}%</span>
+        <span style={{ fontSize: 9, color: "#f87171", fontFamily: "'IBM Plex Mono', monospace" }}>{bearPct}%</span>
+      </div>
+      {vetoed && vetoReason && (
+        <div style={{ fontSize: 9, color: "#fb923c", fontFamily: "'IBM Plex Mono', monospace", marginBottom: 3 }}>⚠ {vetoReason}</div>
+      )}
+      {synthesis && (
+        <div style={{ fontSize: 9, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.4 }}>{synthesis.slice(0, 140)}</div>
+      )}
     </div>
   );
 }
@@ -234,13 +267,13 @@ function SetupCard({ setup, onLogSetup, instrument, dayType }) {
   );
 }
 
-function InstrumentPanel({ data, onLogSetup }) {
+function InstrumentPanel({ data, onLogSetup, gateData }) {
   const hasError = !!data.error && !data.eligible_setups?.length;
   const openLoc = OPEN_LOC_COLORS[data.open_location] || { color: "#64748b", bg: "rgba(100,116,139,0.12)" };
   const adrPct = data.adr_state?.consumed_pct ?? data._context?.today?.adr_consumed_pct ?? 0;
 
   return (
-    <div style={{ background: "rgba(10,14,26,0.85)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ background: "rgba(10,14,26,0.85)", border: `1px solid ${gateData ? (GATE_STYLES[gateData.alert_gate]?.panelBorder || "rgba(255,255,255,0.08)") : "rgba(255,255,255,0.08)"}`, borderRadius: 8, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, transition: "border-color 0.4s" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -287,6 +320,9 @@ function InstrumentPanel({ data, onLogSetup }) {
       {/* Divider */}
       <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "2px 0" }} />
 
+      {/* Arbiter Gate */}
+      {gateData && <ArbiterBadge gate={gateData.alert_gate} bullPct={gateData.bull_pct} bearPct={gateData.bear_pct} synthesis={gateData.synthesis} vetoed={gateData.veto_applied} vetoReason={gateData.veto_reason} />}
+
       {/* Error state */}
       {hasError && (
         <div style={{ background: "rgba(255,77,109,0.08)", border: "1px solid rgba(255,77,109,0.2)", borderRadius: 6, padding: "8px 10px", fontSize: 10, color: "#ff4d6d", fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -316,6 +352,7 @@ export default function SetupMonitor({ onLogSetup, symbolLivePrices, pxConnected
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError] = useState(null);
+  const [gateData, setGateData] = useState({}); // keyed by instrument
 
   const fetchSetups = useCallback(async () => {
     setLoading(true);
@@ -342,11 +379,31 @@ export default function SetupMonitor({ onLogSetup, symbolLivePrices, pxConnected
     }
   }, []);
 
+  const fetchGates = useCallback(async () => {
+    const instruments = ['ES', 'NQ', 'GC', 'CL'];
+    const results = await Promise.allSettled(
+      instruments.map(async (inst) => {
+        const r = await fetch(`${AGENT_URL}/api/agents/quick-gate?instrument=${inst}`);
+        const d = await r.json();
+        return { inst, data: d.success ? d : null };
+      })
+    );
+    const newGates = {};
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value.data) {
+        newGates[r.value.inst] = r.value.data;
+      }
+    }
+    setGateData(newGates);
+  }, []);
+
   useEffect(() => {
     fetchSetups();
+    fetchGates();
     const iv = setInterval(fetchSetups, 15 * 60 * 1000);
-    return () => clearInterval(iv);
-  }, [fetchSetups]);
+    const gateIv = setInterval(fetchGates, 15 * 60 * 1000);
+    return () => { clearInterval(iv); clearInterval(gateIv); };
+  }, [fetchSetups, fetchGates]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%" }}>
@@ -394,7 +451,7 @@ export default function SetupMonitor({ onLogSetup, symbolLivePrices, pxConnected
       {data?.setups && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
           {data.setups.map((s, i) => (
-            <InstrumentPanel key={s.instrument || i} data={s} onLogSetup={onLogSetup} />
+            <InstrumentPanel key={s.instrument || i} data={s} onLogSetup={onLogSetup} gateData={gateData[s.instrument] || null} />
           ))}
         </div>
       )}
