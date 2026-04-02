@@ -3450,6 +3450,347 @@ Active Setups: ${sessionContext.activeSetups?.length
   }
 });
 
+// ── REAL GEX ENGINE ───────────────────────────────────────────────────────────
+// Black-Scholes gamma (sensitivity of delta to spot price)
+function bsGamma(S, K, T, r, sigma) {
+  if (T <= 0.0001 || sigma <= 0.001 || S <= 0 || K <= 0) return 0;
+  try {
+    const d1 = (Math.log(S / K) + (r + (sigma * sigma) / 2) * T) / (sigma * Math.sqrt(T));
+    const phi = Math.exp(-d1 * d1 / 2) / Math.sqrt(2 * Math.PI);
+    return phi / (S * sigma * Math.sqrt(T));
+  } catch { return 0; }
+}
+
+function formatGexVal(gex) {
+  const abs = Math.abs(gex);
+  const sign = gex >= 0 ? '+' : '-';
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(0)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(0)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+// Fetch one options expiry from Yahoo Finance
+async function yahooOptions(ticker, dateTs) {
+  const base = `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`;
+  const url = dateTs ? `${base}?date=${dateTs}` : base;
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+  });
+  if (!r.ok) throw new Error(`Yahoo options ${ticker} HTTP ${r.status}`);
+  const j = await r.json();
+  const result = j.optionChain?.result?.[0];
+  if (!result) throw new Error(`No options data for ${ticker}`);
+  return result;
+}
+
+async function calcGexForSymbol(ticker, liveSpot) {
+  const r = 0.05; // approximate risk-free rate
+  const now = Date.now();
+
+  // Fetch nearest expiry + get expiry date list
+  const firstResult = await yahooOptions(ticker, null);
+  const spot = liveSpot || firstResult.quote.regularMarketPrice;
+  const expirationDates = firstResult.expirationDates || [];
+
+  // Collect options from nearest 3 expirations
+  const expiries = [firstResult];
+  for (let i = 1; i < Math.min(3, expirationDates.length); i++) {
+    try {
+      const res = await yahooOptions(ticker, expirationDates[i]);
+      expiries.push(res);
+    } catch (e) {
+      console.warn(`GEX: skipping expiry ${expirationDates[i]} for ${ticker}: ${e.message}`);
+    }
+  }
+
+  // Build per-strike GEX map
+  const strikeMap = {}; // K → { callGex, putGex }
+
+  for (const expResult of expiries) {
+    const expiryOptions = expResult.options?.[0];
+    if (!expiryOptions) continue;
+    const expMs = expiryOptions.expirationDate * 1000;
+    const T = Math.max((expMs - now) / (365.25 * 24 * 3600 * 1000), 1 / 365);
+
+    for (const c of (expiryOptions.calls || [])) {
+      const K = c.strike;
+      if (!K) continue;
+      const sigma = Math.max(c.impliedVolatility || 0.2, 0.01);
+      const oi = c.openInterest || 0;
+      if (oi === 0) continue;
+      const gamma = bsGamma(spot, K, T, r, sigma);
+      const gex = gamma * oi * 100 * spot * spot;
+      if (!strikeMap[K]) strikeMap[K] = { callGex: 0, putGex: 0 };
+      strikeMap[K].callGex += gex;
+    }
+
+    for (const p of (expiryOptions.puts || [])) {
+      const K = p.strike;
+      if (!K) continue;
+      const sigma = Math.max(p.impliedVolatility || 0.2, 0.01);
+      const oi = p.openInterest || 0;
+      if (oi === 0) continue;
+      const gamma = bsGamma(spot, K, T, r, sigma);
+      const gex = gamma * oi * 100 * spot * spot;
+      if (!strikeMap[K]) strikeMap[K] = { callGex: 0, putGex: 0 };
+      strikeMap[K].putGex += gex;
+    }
+  }
+
+  // Build sorted strike array with net GEX
+  const strikesArr = Object.keys(strikeMap).map(k => {
+    const K = parseFloat(k);
+    const netGex = strikeMap[K].callGex - strikeMap[K].putGex;
+    return { K, callGex: strikeMap[K].callGex, putGex: strikeMap[K].putGex, netGex };
+  }).sort((a, b) => a.K - b.K);
+
+  // Totals
+  const totalCallGex = strikesArr.reduce((s, x) => s + x.callGex, 0);
+  const totalPutGex  = strikesArr.reduce((s, x) => s + x.putGex, 0);
+  const netGexTotal  = totalCallGex - totalPutGex;
+
+  // Flip point: scan strikes for cumulative net GEX sign change
+  let flipStrikeEtf = null;
+  let cumGex = 0;
+  for (let i = 0; i < strikesArr.length; i++) {
+    const prev = cumGex;
+    cumGex += strikesArr[i].netGex;
+    if (i > 0 && prev !== 0 && prev * cumGex < 0) {
+      const t = Math.abs(prev) / (Math.abs(prev) + Math.abs(cumGex));
+      flipStrikeEtf = strikesArr[i - 1].K + t * (strikesArr[i].K - strikesArr[i - 1].K);
+      break;
+    }
+  }
+  if (!flipStrikeEtf) {
+    // fallback: weighted average of near-spot strikes
+    const nearStrk = strikesArr.filter(s => Math.abs(s.K - spot) / spot < 0.03);
+    if (nearStrk.length) {
+      const wSum = nearStrk.reduce((a, s) => a + Math.abs(s.netGex), 0);
+      flipStrikeEtf = wSum > 0
+        ? nearStrk.reduce((a, s) => a + s.K * Math.abs(s.netGex), 0) / wSum
+        : spot;
+    } else {
+      flipStrikeEtf = spot;
+    }
+  }
+
+  // Call wall (strike above spot with highest CALL GEX)
+  const aboveSpot = strikesArr.filter(s => s.K >= spot);
+  const callWallStrike = aboveSpot.reduce((best, s) => !best || s.callGex > best.callGex ? s : best, null);
+  // Put wall (strike below spot with highest PUT GEX)
+  const belowSpot = strikesArr.filter(s => s.K < spot);
+  const putWallStrike = belowSpot.reduce((best, s) => !best || s.putGex > best.putGex ? s : best, null);
+
+  // Regime
+  const regime = spot >= flipStrikeEtf ? 'positive' : 'negative';
+
+  return {
+    spot,
+    flipStrikeEtf,
+    callWallStrike: callWallStrike?.K || null,
+    putWallStrike:  putWallStrike?.K || null,
+    strikesArr,
+    totalCallGex,
+    totalPutGex,
+    netGexTotal,
+    regime,
+  };
+}
+
+// Build the structured GEX response scaled to futures prices
+function buildGexResponse(raw, futureMult, liveSpotFutures) {
+  const { spot, flipStrikeEtf, callWallStrike, putWallStrike, strikesArr, totalCallGex, totalPutGex, netGexTotal, regime } = raw;
+  const mult = liveSpotFutures && spot > 0 ? liveSpotFutures / spot : futureMult;
+
+  const toFut = (etfPrice) => Math.round(etfPrice * mult);
+  const futSpot   = liveSpotFutures || toFut(spot);
+  const futFlip   = toFut(flipStrikeEtf);
+  const futCWall  = callWallStrike ? toFut(callWallStrike) : null;
+  const futPWall  = putWallStrike  ? toFut(putWallStrike)  : null;
+
+  // Select ~12 most relevant strikes: ±8% of spot, sorted by abs GEX
+  const nearStrikes = strikesArr
+    .filter(s => Math.abs(s.K - spot) / spot <= 0.08)
+    .sort((a, b) => Math.abs(b.netGex) - Math.abs(a.netGex))
+    .slice(0, 12)
+    .sort((a, b) => b.K - a.K); // re-sort descending by price for display
+
+  const maxAbsGex = Math.max(...nearStrikes.map(s => Math.abs(s.netGex)), 1);
+
+  // Build levels array (highest price first)
+  const levelsMap = nearStrikes.map(s => {
+    const futPrice = toFut(s.K);
+    let type, label;
+    if (callWallStrike && s.K === callWallStrike)      { type = 'call_wall'; label = 'Call Wall'; }
+    else if (putWallStrike && s.K === putWallStrike)   { type = 'put_wall';  label = 'Put Wall'; }
+    else if (s.K > spot)                               { type = 'resistance'; label = s.netGex > 0 ? 'Gamma Resist' : 'Neg Resist'; }
+    else                                               { type = 'support';   label = s.netGex < 0 ? 'Gamma Support' : 'Pos Support'; }
+
+    const strength = Math.round((Math.abs(s.netGex) / maxAbsGex) * 100);
+    return { price: futPrice, type, label, strength, gamma: formatGexVal(s.netGex) };
+  });
+
+  // Insert SPOT marker at the correct position
+  const spotIdx = levelsMap.findIndex(l => l.price <= futSpot);
+  levelsMap.splice(spotIdx === -1 ? levelsMap.length : spotIdx, 0, {
+    price: futSpot, type: 'spot', label: 'SPOT', strength: 100, gamma: '—',
+  });
+
+  return {
+    price: futSpot,
+    levels: levelsMap,
+    flipPoint:  futFlip,
+    zerogamma:  futFlip,
+    callWall:   futCWall,
+    putWall:    futPWall,
+    callGamma:  formatGexVal(totalCallGex),
+    putGamma:   formatGexVal(totalPutGex),
+    netGamma:   formatGexVal(netGexTotal),
+    regime,
+    etfSpot: spot,
+    mult,
+  };
+}
+
+// Cache: avoid hammering Yahoo Finance (options data is ~15min delayed anyway)
+let gexCache = { ts: 0, data: null };
+const GEX_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+app.get('/api/gex', async (req, res) => {
+  try {
+    // Return cache if fresh
+    if (gexCache.data && (Date.now() - gexCache.ts) < GEX_CACHE_TTL) {
+      return res.json({ success: true, data: gexCache.data, cached: true, ts: new Date(gexCache.ts).toISOString() });
+    }
+
+    // Live futures prices from dxCache for accurate ETF→futures conversion
+    const liveES = dxCache.ES?.price || null;
+    const liveNQ = dxCache.NQ?.price || null;
+
+    const [esRaw, nqRaw] = await Promise.allSettled([
+      calcGexForSymbol('SPY', liveES),
+      calcGexForSymbol('QQQ', liveNQ),
+    ]);
+
+    const result = {};
+    if (esRaw.status === 'fulfilled') {
+      result.ES = buildGexResponse(esRaw.value, 10, liveES);
+    } else {
+      console.error('ES GEX error:', esRaw.reason?.message);
+      result.ES = null;
+    }
+    if (nqRaw.status === 'fulfilled') {
+      result.NQ = buildGexResponse(nqRaw.value, 40, liveNQ);
+    } else {
+      console.error('NQ GEX error:', nqRaw.reason?.message);
+      result.NQ = null;
+    }
+
+    gexCache = { ts: Date.now(), data: result };
+    res.json({ success: true, data: result, cached: false, ts: new Date().toISOString() });
+  } catch (err) {
+    console.error('GEX endpoint error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── /api/gex-agent ────────────────────────────────────────────────────────────
+const GEX_AGENT_SYSTEM = `You are a professional options market analyst specialising in gamma exposure (GEX) and dealer hedging dynamics. You translate gamma profiles into actionable directional bias for futures day traders.
+
+Core principles you apply:
+- POSITIVE GAMMA regime: dealers buy dips / sell rips → mean-reverting, range-bound price action
+- NEGATIVE GAMMA regime: dealers amplify moves → trending, volatile, larger ranges
+- Call Wall = strike with densest call OI above spot → dealer short-call hedge = real price resistance
+- Put Wall = strike with densest put OI below spot → dealer long-put hedge = price support / magnet
+- Zero-Gamma / Flip Point = where dealer net hedging direction changes → volatility regime transition
+- Price approaching the flip from below = regime risk to negative gamma (breakdown acceleration)
+- Price approaching the flip from above = regime risk if price drops below (sellers gain momentum)
+
+Output ONLY valid JSON, no markdown, no explanation outside the JSON.`;
+
+app.post('/api/gex-agent', async (req, res) => {
+  try {
+    const { symbol, gexData } = req.body;
+    if (!gexData) return res.status(400).json({ success: false, error: 'No GEX data provided' });
+
+    const callWallStr  = gexData.callWall  ? gexData.callWall.toLocaleString()  : 'N/A';
+    const putWallStr   = gexData.putWall   ? gexData.putWall.toLocaleString()   : 'N/A';
+    const aboveFlip    = gexData.price >= gexData.flipPoint;
+    const pctFromFlip  = (((gexData.price - gexData.flipPoint) / gexData.flipPoint) * 100).toFixed(2);
+    const topLevels    = (gexData.levels || [])
+      .filter(l => l.type !== 'spot')
+      .slice(0, 8)
+      .map(l => `  ${l.price.toLocaleString()} — ${l.label}  ${l.gamma}  strength ${l.strength}%`)
+      .join('\n');
+
+    const prompt = `Live GEX snapshot for ${symbol} futures:
+
+Spot Price:    ${gexData.price.toLocaleString()}
+Net GEX:       ${gexData.netGamma}
+Call GEX:      ${gexData.callGamma}
+Put GEX:       ${gexData.putGamma}
+Gamma Regime:  ${gexData.regime.toUpperCase()}
+Flip Point:    ${gexData.flipPoint.toLocaleString()}  (spot is ${aboveFlip ? 'ABOVE' : 'BELOW'} flip by ${Math.abs(pctFromFlip)}%)
+Call Wall:     ${callWallStr}
+Put Wall:      ${putWallStr}
+
+Top Gamma Levels (by absolute exposure):
+${topLevels}
+
+Return ONLY this exact JSON (no extra text):
+{
+  "bias": "bullish|bearish|neutral",
+  "confidence": <integer 0-100>,
+  "keyLevel": <single most important price integer>,
+  "reasoning": "<2 sentence explanation of current dealer hedging dynamics and directional implication>",
+  "regimeNote": "<1 sentence on volatility regime and what it means for intraday range>",
+  "riskScenario": "<1 sentence on what price action would flip the regime or invalidate the bias>"
+}`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 400,
+        temperature: 0.2,
+        system: GEX_AGENT_SYSTEM,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      throw new Error(`Anthropic API error: ${aiRes.status} ${errText}`);
+    }
+
+    const aiData = await aiRes.json();
+    const rawText = aiData.content[0]?.text?.trim() || '';
+
+    let analysis;
+    try {
+      analysis = JSON.parse(rawText);
+    } catch {
+      const m = rawText.match(/\{[\s\S]*\}/);
+      if (m) {
+        try { analysis = JSON.parse(m[0]); } catch { analysis = { bias: 'neutral', confidence: 50, keyLevel: gexData.flipPoint, reasoning: rawText, regimeNote: '', riskScenario: '' }; }
+      } else {
+        analysis = { bias: 'neutral', confidence: 50, keyLevel: gexData.flipPoint, reasoning: rawText, regimeNote: '', riskScenario: '' };
+      }
+    }
+
+    res.json({ success: true, analysis, symbol });
+  } catch (err) {
+    console.error('GEX agent error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ── ERROR HANDLER ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -3471,6 +3812,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   /api/scanner     — Multi-Instrument Scanner (ES/NQ/DAX/XAU/OIL)`);
   console.log(`   /api/setup-monitor — Conditional Setup Monitor (ES/NQ/GC/CL)`);
   console.log(`   /api/session-bias — 4-Agent Session Bias Synthesizer (ES/NQ/DAX/XAU/OIL)`);
+  console.log(`   /api/gex         — Real GEX via SPY/QQQ options + Black-Scholes gamma`);
+  console.log(`   /api/gex-agent   — GEX AI analyst (dealer hedging dynamics)`);
   console.log(`   /api/tpo         — TPO Value Area Calculator (yesterday RTH)`);
   console.log(`   /api/qp-calculate — D1 Q Point Calculator (swing quartiles)`);
   console.log(`   /api/adr-asr     — Blahtech ADR/ASR Target Levels (ES/NQ/YM/FDXM)`);

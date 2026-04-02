@@ -56,36 +56,7 @@ const NEWS_FALLBACK = [
   { time: "07:08", source: "RTR", headline: "China trade data shows export growth slowing, yuan pressured", impact: "medium", tag: "INTL" },
   { time: "06:51", source: "CNBC", headline: "Put/call ratio spikes to 1.42 — highest reading since Oct 2023", impact: "high", tag: "OPTIONS" },
 ];
-const GAMMA_DATA = {
-  ES: {
-    price: 6698, levels: [
-      { price: 6800, type: "call_wall", label: "Call Wall", strength: 95, gamma: "+$2.1B" },
-      { price: 6775, type: "resistance", label: "Gamma Resist", strength: 72, gamma: "+$980M" },
-      { price: 6750, type: "resistance", label: "Key Resist", strength: 60, gamma: "+$620M" },
-      { price: 6725, type: "resistance", label: "Minor Resist", strength: 38, gamma: "+$290M" },
-      { price: 6698, type: "spot", label: "SPOT", strength: 100, gamma: "—" },
-      { price: 6675, type: "support", label: "Minor Support", strength: 35, gamma: "-$240M" },
-      { price: 6650, type: "support", label: "Key Support", strength: 65, gamma: "-$710M" },
-      { price: 6600, type: "put_wall", label: "Put Wall", strength: 88, gamma: "-$1.8B" },
-      { price: 6550, type: "support", label: "Major Support", strength: 80, gamma: "-$1.4B" },
-    ],
-    flipPoint: 6650, zerogamma: 6645, callGamma: "$4.2B", putGamma: "$3.6B", netGamma: "+$0.6B", regime: "positive",
-  },
-  NQ: {
-    price: 24667, levels: [
-      { price: 25200, type: "call_wall", label: "Call Wall", strength: 92, gamma: "+$1.4B" },
-      { price: 25000, type: "resistance", label: "Gamma Resist", strength: 68, gamma: "+$760M" },
-      { price: 24900, type: "resistance", label: "Key Resist", strength: 55, gamma: "+$440M" },
-      { price: 24800, type: "resistance", label: "Minor Resist", strength: 30, gamma: "+$180M" },
-      { price: 24667, type: "spot", label: "SPOT", strength: 100, gamma: "—" },
-      { price: 24500, type: "support", label: "Minor Support", strength: 32, gamma: "-$160M" },
-      { price: 24300, type: "support", label: "Key Support", strength: 70, gamma: "-$820M" },
-      { price: 24000, type: "put_wall", label: "Put Wall", strength: 85, gamma: "-$1.2B" },
-      { price: 23800, type: "support", label: "Major Support", strength: 75, gamma: "-$1.0B" },
-    ],
-    flipPoint: 24400, zerogamma: 24350, callGamma: "$2.8B", putGamma: "$2.2B", netGamma: "+$0.6B", regime: "positive",
-  },
-};
+// GEX data is now fetched live from /api/gex — see GammaLevels component below
 
 // ── HOOKS ─────────────────────────────────────────────────────────────────────
 
@@ -359,43 +330,187 @@ function DirectionalBias({ tickers, market }) {
 
 function GammaLevels() {
   const [active, setActive] = useState("ES");
+  const [gexData, setGexData] = useState({ ES: null, NQ: null });
+  const [loading, setLoading] = useState(false);
+  const [lastFetch, setLastFetch] = useState(null);
   const [aiOpen, setAiOpen] = useState(false);
-  const data = GAMMA_DATA[active];
+  const [agentResult, setAgentResult] = useState(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [error, setError] = useState(null);
+
   const levelColor = (type) => ({ call_wall: "#00d4aa", put_wall: "#ff4d6d", spot: "#f6c90e", resistance: "#4a9eff", support: "#a78bfa" }[type] || "#64748b");
+
+  const fetchGex = useCallback(async (force = false) => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/gex${force ? "?bust=" + Date.now() : ""}`);
+      const j = await r.json();
+      if (j.success && j.data) {
+        setGexData(j.data);
+        setLastFetch(new Date(j.ts));
+        setAgentResult(null); // clear stale analysis
+      } else {
+        setError(j.error || "No GEX data");
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Auto-fetch on mount, refresh every 5 minutes
+  useEffect(() => {
+    fetchGex();
+    const t = setInterval(() => fetchGex(), 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [fetchGex]);
+
+  const runGexAgent = useCallback(async () => {
+    const d = gexData[active];
+    if (!d) return;
+    setAgentLoading(true); setAgentResult(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/api/gex-agent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: active, gexData: d }),
+      });
+      const j = await r.json();
+      if (j.success) setAgentResult(j.analysis);
+      else setAgentResult({ bias: "neutral", confidence: 0, reasoning: j.error, regimeNote: "", riskScenario: "" });
+    } catch (e) {
+      setAgentResult({ bias: "neutral", confidence: 0, reasoning: e.message, regimeNote: "", riskScenario: "" });
+    } finally {
+      setAgentLoading(false);
+    }
+  }, [active, gexData]);
+
+  const data = gexData[active];
+
+  // Loading / error state
+  if (!data) {
+    return (
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {["ES", "NQ"].map(sym => (
+            <button key={sym} onClick={() => setActive(sym)} style={{ fontSize: 11, padding: "4px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, background: active === sym ? "rgba(74,158,255,0.15)" : "none", border: `1px solid ${active === sym ? "#4a9eff" : "rgba(255,255,255,0.1)"}`, color: active === sym ? "#4a9eff" : "#475569" }}>{sym}</button>
+          ))}
+          <button onClick={() => fetchGex(true)} style={{ marginLeft: "auto", fontSize: 9, padding: "3px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", background: "none", border: "1px solid rgba(74,158,255,0.3)", color: "#4a9eff" }}>↻ REFRESH</button>
+        </div>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
+          {loading ? (
+            <><div style={{ width: 20, height: 20, border: "2px solid #4a9eff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /><span style={{ fontSize: 11, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>FETCHING SPY/QQQ OPTIONS…</span></>
+          ) : error ? (
+            <><span style={{ fontSize: 11, color: "#ff4d6d", fontFamily: "'IBM Plex Mono', monospace" }}>⚠ {error}</span><button onClick={() => fetchGex(true)} style={{ fontSize: 10, color: "#4a9eff", background: "none", border: "1px solid rgba(74,158,255,0.3)", borderRadius: 4, padding: "4px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>RETRY</button></>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  const biasColor = { bullish: "#00d4aa", bearish: "#ff4d6d", neutral: "#f59e0b" };
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Header row */}
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        {["ES", "NQ"].map(sym => (<button key={sym} onClick={() => setActive(sym)} style={{ fontSize: 11, padding: "4px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, background: active === sym ? "rgba(74,158,255,0.15)" : "none", border: `1px solid ${active === sym ? "#4a9eff" : "rgba(255,255,255,0.1)"}`, color: active === sym ? "#4a9eff" : "#475569" }}>{sym}</button>))}
-        <span style={{ marginLeft: "auto", fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: data.regime === "positive" ? "#00d4aa" : "#ff4d6d" }}>{data.regime === "positive" ? "● POS GAMMA" : "● NEG GAMMA"}</span>
+        {["ES", "NQ"].map(sym => (
+          <button key={sym} onClick={() => { setActive(sym); setAgentResult(null); }} style={{ fontSize: 11, padding: "4px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, background: active === sym ? "rgba(74,158,255,0.15)" : "none", border: `1px solid ${active === sym ? "#4a9eff" : "rgba(255,255,255,0.1)"}`, color: active === sym ? "#4a9eff" : "#475569" }}>{sym}</button>
+        ))}
+        <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: data.regime === "positive" ? "#00d4aa" : "#ff4d6d" }}>
+          {data.regime === "positive" ? "● POS GAMMA" : "● NEG GAMMA"}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 9, color: "#334155", fontFamily: "'IBM Plex Mono', monospace" }}>
+          {lastFetch ? `${lastFetch.getHours().toString().padStart(2,"0")}:${lastFetch.getMinutes().toString().padStart(2,"0")} LIVE` : ""}
+          {loading && " ↻"}
+        </span>
+        <button onClick={() => fetchGex(true)} title="Force refresh GEX" style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", background: "none", border: "1px solid rgba(255,255,255,0.08)", color: "#475569" }}>↻</button>
       </div>
+
+      {/* Stats grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
-        {[{ label: "NET GAMMA", val: data.netGamma, color: data.netGamma.startsWith("+") ? "#00d4aa" : "#ff4d6d" }, { label: "CALL Γ", val: data.callGamma, color: "#4a9eff" }, { label: "PUT Γ", val: data.putGamma, color: "#ff4d6d" }, { label: "FLIP PT", val: data.flipPoint.toLocaleString(), color: "#f6c90e" }].map(item => (
+        {[
+          { label: "NET GAMMA", val: data.netGamma, color: data.netGamma.startsWith("+") ? "#00d4aa" : "#ff4d6d" },
+          { label: "CALL Γ", val: data.callGamma, color: "#4a9eff" },
+          { label: "PUT Γ", val: data.putGamma, color: "#ff4d6d" },
+          { label: "FLIP PT", val: data.flipPoint.toLocaleString(), color: "#f6c90e" },
+        ].map(item => (
           <div key={item.label} style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 5, padding: "6px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 8, color: "#334155", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.08em", marginBottom: 3 }}>{item.label}</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: item.color, fontFamily: "'IBM Plex Mono', monospace" }}>{item.val}</div>
           </div>
         ))}
       </div>
+
+      {/* Levels list */}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {data.levels.slice().reverse().map((level, i) => {
-          const isSpot = level.type === "spot"; const c = levelColor(level.type);
+        {(data.levels || []).map((level, i) => {
+          const isSpot = level.type === "spot";
+          const c = levelColor(level.type);
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", padding: "5px 0", borderBottom: isSpot ? `1px solid ${c}55` : "1px solid rgba(255,255,255,0.04)", background: isSpot ? `${c}08` : "transparent" }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: c, opacity: isSpot ? 1 : 0.6, flexShrink: 0, marginRight: 8 }} />
-              <span style={{ fontSize: 12, fontWeight: isSpot ? 800 : 500, color: c, fontFamily: "'IBM Plex Mono', monospace", minWidth: 60 }}>{level.price.toLocaleString()}</span>
+              <span style={{ fontSize: 12, fontWeight: isSpot ? 800 : 500, color: c, fontFamily: "'IBM Plex Mono', monospace", minWidth: 64 }}>{level.price.toLocaleString()}</span>
               <span style={{ fontSize: 9, color: isSpot ? c : "#475569", fontFamily: "'IBM Plex Mono', monospace", flex: 1 }}>{level.label}</span>
-              <div style={{ width: (level.strength / 100) * 60, height: 4, background: c, borderRadius: 2, opacity: 0.4, marginRight: 8 }} />
-              <span style={{ fontSize: 9, color: level.gamma.startsWith("+") ? "#00d4aa" : level.gamma.startsWith("-") ? "#ff4d6d" : "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>{level.gamma}</span>
+              <div style={{ width: Math.max((level.strength / 100) * 56, 2), height: 4, background: c, borderRadius: 2, opacity: 0.4, marginRight: 8 }} />
+              <span style={{ fontSize: 9, color: level.gamma.startsWith("+") ? "#00d4aa" : level.gamma.startsWith("-") ? "#ff4d6d" : "#64748b", fontFamily: "'IBM Plex Mono', monospace", minWidth: 52, textAlign: "right" }}>{level.gamma}</span>
             </div>
           );
         })}
       </div>
-      <div style={{ fontSize: 10, color: "#334155", fontFamily: "'IBM Plex Mono', monospace", display: "flex", gap: 12 }}>
+
+      {/* Footer */}
+      <div style={{ fontSize: 10, color: "#334155", fontFamily: "'IBM Plex Mono', monospace", display: "flex", gap: 12, flexWrap: "wrap" }}>
         <span>Zero-Gamma: <span style={{ color: "#f6c90e" }}>{data.zerogamma.toLocaleString()}</span></span>
-        <span style={{ color: data.price > data.flipPoint ? "#00d4aa" : "#ff4d6d" }}>{data.price > data.flipPoint ? "▲ Above Flip" : "▼ Below Flip"}</span>
+        <span style={{ color: data.price > data.flipPoint ? "#00d4aa" : "#ff4d6d" }}>
+          {data.price > data.flipPoint ? "▲ Above Flip" : "▼ Below Flip"}
+        </span>
+        {data.callWall && <span>CW: <span style={{ color: "#00d4aa" }}>{data.callWall.toLocaleString()}</span></span>}
+        {data.putWall  && <span>PW: <span style={{ color: "#ff4d6d" }}>{data.putWall.toLocaleString()}</span></span>}
       </div>
-      <button onClick={() => setAiOpen(!aiOpen)} style={{ fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}>{aiOpen ? "▲ HIDE GAMMA ANALYSIS" : "▼ AI GAMMA ANALYSIS"}</button>
-      {aiOpen && <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: 12, height: 160, flexShrink: 0 }}><AIAnalysis key={active} prompt={`Analyze gamma profile for ${active}. Spot ${data.price}, Net Gamma ${data.netGamma}, ${data.regime} gamma regime, Flip at ${data.flipPoint}, Call Wall ${data.levels.find(l => l.type === "call_wall")?.price}, Put Wall ${data.levels.find(l => l.type === "put_wall")?.price}. Explain dealer hedging dynamics and best trade setup.`} /></div>}
+
+      {/* GEX Agent button */}
+      <button
+        onClick={() => { if (!aiOpen) { setAiOpen(true); if (!agentResult) runGexAgent(); } else setAiOpen(false); }}
+        style={{ fontSize: 10, color: "#4a9eff", background: "rgba(74,158,255,0.08)", border: "1px solid rgba(74,158,255,0.25)", borderRadius: 4, padding: "6px 12px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", width: "100%" }}
+      >
+        {aiOpen ? "▲ HIDE GEX ANALYSIS" : "▼ GEX AI AGENT"}
+      </button>
+
+      {/* GEX Agent panel */}
+      {aiOpen && (
+        <div style={{ background: "rgba(0,0,0,0.35)", border: "1px solid rgba(74,158,255,0.15)", borderRadius: 6, padding: 12, flexShrink: 0 }}>
+          {agentLoading ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 14, height: 14, border: "2px solid #4a9eff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+              <span style={{ fontSize: 11, color: "#475569", fontFamily: "'IBM Plex Mono', monospace" }}>Analysing gamma dynamics…</span>
+            </div>
+          ) : agentResult ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: biasColor[agentResult.bias] || "#f59e0b", fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {(agentResult.bias || "—").toUpperCase()}
+                </span>
+                <span style={{ fontSize: 10, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>
+                  {agentResult.confidence}% CONF
+                </span>
+                <span style={{ fontSize: 10, color: "#f6c90e", fontFamily: "'IBM Plex Mono', monospace", marginLeft: "auto" }}>
+                  KEY: {agentResult.keyLevel?.toLocaleString()}
+                </span>
+                <button onClick={() => runGexAgent()} style={{ fontSize: 9, color: "#475569", background: "none", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 3, padding: "2px 6px", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>↻</button>
+              </div>
+              <p style={{ margin: 0, fontSize: 11, color: "#94a3b8", fontFamily: "'DM Sans', sans-serif", lineHeight: 1.5 }}>{agentResult.reasoning}</p>
+              {agentResult.regimeNote && <p style={{ margin: 0, fontSize: 10, color: "#64748b", fontFamily: "'DM Sans', sans-serif", lineHeight: 1.4, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 6 }}>{agentResult.regimeNote}</p>}
+              {agentResult.riskScenario && <p style={{ margin: 0, fontSize: 10, color: "#f59e0b88", fontFamily: "'DM Sans', sans-serif", lineHeight: 1.4 }}>⚠ {agentResult.riskScenario}</p>}
+            </div>
+          ) : (
+            <button onClick={runGexAgent} style={{ fontSize: 10, color: "#4a9eff", background: "none", border: "none", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", padding: 0 }}>
+              ▶ Run GEX Agent Analysis
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -650,6 +765,7 @@ export default function Terminal() {
         @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
         @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
         @keyframes loadbar { 0% { width:0%; margin-left:0; } 50% { width:60%; margin-left:20%; } 100% { width:0%; margin-left:100%; } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .terminal-root { animation: fadeIn 0.4s ease both; }
       `}</style>
       <div style={{ padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.07)", background: "rgba(0,0,0,0.5)", backdropFilter: "blur(10px)", position: "sticky", top: 0, zIndex: 100, flexShrink: 0 }}>
