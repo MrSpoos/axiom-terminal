@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 
 const WS_URL = "wss://rtc.topstepx.com/hubs/market";
 const API_BASE = process.env.REACT_APP_API_URL || "https://axiom-terminal-production.up.railway.app";
-const JWT_KEY = "projectx_jwt";
-const EXP_KEY = "projectx_jwt_exp";
+const JWT_KEY  = "projectx_jwt";
+const EXP_KEY  = "projectx_jwt_exp";
+export const ACCOUNT_KEY = "projectx_account_id";
 
 // ── Contract IDs — update each quarterly roll ──────────────────────────────
 // Month codes: F=Jan G=Feb H=Mar J=Apr K=May M=Jun N=Jul Q=Aug U=Sep V=Oct X=Nov Z=Dec
@@ -182,6 +183,8 @@ export function useProjectX() {
     localStorage.setItem(JWT_KEY, d.token);
     localStorage.setItem(EXP_KEY, String(d.expiresAt));
     _connect(d.token);
+    // Auto-fetch and cache account ID silently
+    _autoFetchAccount(d.token);
     return d.token;
   }, []);
 
@@ -201,6 +204,23 @@ export function useProjectX() {
   }, []);
 
   return { connected, livePrices, dataSource, login, logout, reconnect };
+}
+
+async function _autoFetchAccount(jwt) {
+  try {
+    const r = await fetch(`${API_BASE}/api/projectx/accounts`, {
+      headers: { 'Content-Type': 'application/json', 'x-projectx-token': jwt },
+    });
+    const d = await r.json();
+    const accounts = d.accounts || [];
+    if (accounts.length > 0) {
+      const id = String(accounts[0].id);
+      localStorage.setItem(ACCOUNT_KEY, id);
+      console.log('ProjectX: auto-saved account ID', id);
+    }
+  } catch (err) {
+    console.warn('ProjectX: account auto-fetch failed', err.message);
+  }
 }
 
 function _connect(jwt) {
