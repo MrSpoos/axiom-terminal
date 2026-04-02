@@ -3828,3 +3828,8 @@ app.listen(PORT, '0.0.0.0', () => {
 // ── Axiom AI Agents (Phase 1: Macro + Correlation) ───────────────────────────
 require('./agents')(app);
 
+
+
+// ── Trade Review + Vesper Debrief ─────────────────────────────────────────────
+require('./tradeReview')(app, ANTHROPIC_KEY);
+
