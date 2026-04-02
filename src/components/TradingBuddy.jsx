@@ -55,9 +55,7 @@ function VesperBubble({ msg, biasBorder }) {
     </div>
   );
 }
-) {
-  return <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ maxWidth:"80%" }}><div style={{ background:"#0d1117", border:"1px solid rgba(255,255,255,0.08)", borderLeft:`2px solid ${biasBorder}`, borderRadius:"2px 12px 12px 12px", padding:"10px 14px", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", color:"#cbd5e1", lineHeight:1.6 }}>{renderBold(msg.content)}</div><div style={{ fontSize:9, color:"#334155", marginTop:3, fontFamily:"'IBM Plex Mono',monospace" }}>◈ VESPER · {msg.timestamp}</div></div></div>;
-}
+
 function ErrorBubble({ msg }) {
   return <div style={{ display:"flex", justifyContent:"flex-start", marginBottom:12 }}><div style={{ maxWidth:"80%", background:"rgba(255,77,109,0.08)", border:"1px solid rgba(255,77,109,0.25)", borderLeft:"2px solid #ff4d6d", borderRadius:"2px 12px 12px 12px", padding:"8px 12px", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", color:"#ff4d6d" }}>{msg.content}</div></div>;
 }
