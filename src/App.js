@@ -5,6 +5,7 @@ import SessionBias from "./components/SessionBias";
 import TradingBuddy from "./components/TradingBuddy";
 import ProjectXSetup from "./components/ProjectXSetup";
 import { useProjectX, CONTRACT_IDS } from "./services/projectx";
+import RollReminder from "./components/RollReminder";
 
 const POLYGON_KEY = process.env.REACT_APP_POLYGON_KEY;
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:3001";
@@ -786,6 +787,7 @@ export default function Terminal() {
             onLogout={pxLogout}
             onReconnect={pxReconnect}
           />
+          <RollReminder />
           <Clock />
         </div>
       </div>
