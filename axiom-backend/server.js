@@ -3653,47 +3653,7 @@ function buildGexResponse(raw, futureMult, liveSpotFutures) {
   };
 }
 
-// Cache: avoid hammering Yahoo Finance (options data is ~15min delayed anyway)
-let gexCache = { ts: 0, data: null };
-const GEX_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-app.get('/api/gex', async (req, res) => {
-  try {
-    // Return cache if fresh
-    if (gexCache.data && (Date.now() - gexCache.ts) < GEX_CACHE_TTL) {
-      return res.json({ success: true, data: gexCache.data, cached: true, ts: new Date(gexCache.ts).toISOString() });
-    }
-
-    // Live futures prices from dxCache for accurate ETF→futures conversion
-    const liveES = dxCache.ES?.price || null;
-    const liveNQ = dxCache.NQ?.price || null;
-
-    const [esRaw, nqRaw] = await Promise.allSettled([
-      calcGexForSymbol('SPY', liveES),
-      calcGexForSymbol('QQQ', liveNQ),
-    ]);
-
-    const result = {};
-    if (esRaw.status === 'fulfilled') {
-      result.ES = buildGexResponse(esRaw.value, 10, liveES);
-    } else {
-      console.error('ES GEX error:', esRaw.reason?.message);
-      result.ES = null;
-    }
-    if (nqRaw.status === 'fulfilled') {
-      result.NQ = buildGexResponse(nqRaw.value, 40, liveNQ);
-    } else {
-      console.error('NQ GEX error:', nqRaw.reason?.message);
-      result.NQ = null;
-    }
-
-    gexCache = { ts: Date.now(), data: result };
-    res.json({ success: true, data: result, cached: false, ts: new Date().toISOString() });
-  } catch (err) {
-    console.error('GEX endpoint error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+// NOTE: /api/gex route moved to gexEnhanced.js (unified with FlashAlpha + Yahoo fallback)
 
 // ── /api/gex-agent ────────────────────────────────────────────────────────────
 const GEX_AGENT_SYSTEM = `You are a professional options market analyst specialising in gamma exposure (GEX) and dealer hedging dynamics. You translate gamma profiles into actionable directional bias for futures day traders.
@@ -3830,7 +3790,12 @@ require('./agents')(app);
 
 
 
-// ── GEX Enhanced (TradingView webhook + FlashAlpha) ──────────────────────────
+// ── Expose Yahoo GEX engine for gexEnhanced.js fallback ──────────────────────
+app.locals.calcGexForSymbol = calcGexForSymbol;
+app.locals.buildGexResponse = buildGexResponse;
+app.locals.dxCache = dxCache;
+
+// ── GEX Enhanced (TradingView webhook + FlashAlpha + /api/gex) ───────────────
 require('./gexEnhanced')(app, ANTHROPIC_KEY);
 
 // ── Vesper Scheduler (pre-market brief + performance tracker) ─────────────────
