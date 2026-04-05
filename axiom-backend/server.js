@@ -1999,6 +1999,151 @@ app.get('/api/qp-calculate', async (req, res) => {
   }
 });
 
+// ── /api/qpoints — Multi-instrument Q Point levels (D1 + H4) ─────────────────
+// Returns swing-based quartile Q Points for ES, NQ, GC, CL on both timeframes
+
+const QP_TICKER_MAP = { ES: 'ES=F', NQ: 'NQ=F', GC: 'GC=F', CL: 'CL=F' };
+
+function findSwings(candles, lookback) {
+  const highs = [], lows = [];
+  for (let i = lookback; i < candles.length - lookback; i++) {
+    const c = candles[i];
+    const isHigh = candles.slice(i - lookback, i).every(x => x.high <= c.high) &&
+                   candles.slice(i + 1, i + lookback + 1).every(x => x.high <= c.high);
+    const isLow  = candles.slice(i - lookback, i).every(x => x.low >= c.low) &&
+                   candles.slice(i + 1, i + lookback + 1).every(x => x.low >= c.low);
+    if (isHigh) highs.push({ index: i, price: c.high, time: c.time || c.ts });
+    if (isLow)  lows.push({ index: i, price: c.low, time: c.time || c.ts });
+  }
+  return { highs, lows };
+}
+
+function classifyPriceZone(price, qhi, qp, qmid, qlo) {
+  if (price > qhi)  return 'ABOVE_QHI';
+  if (price >= qp)  return 'UPPER';
+  if (price >= qmid) return 'MIDDLE';
+  if (price >= qlo) return 'LOWER';
+  return 'BELOW_QLO';
+}
+
+function buildQpFromSwings(swingHighs, swingLows, currentPrice) {
+  const r = v => Math.round(v * 100) / 100;
+  const recentHighs = [...swingHighs].sort((a, b) => b.index - a.index);
+  const recentLows  = [...swingLows].sort((a, b) => b.index - a.index);
+
+  if (!recentHighs.length || !recentLows.length) return null;
+
+  let bestPair = null;
+  for (const sh of recentHighs.slice(0, 5)) {
+    for (const sl of recentLows.slice(0, 5)) {
+      const H = sh.price, L = sl.price;
+      if (H <= L) continue;
+      const middle = L + (H - L) * 0.50;
+      const highFirst = sh.index < sl.index;
+      const triggered = highFirst ? currentPrice <= middle : currentPrice >= middle;
+      if (triggered) { bestPair = { H, L, sh, sl, highFirst }; break; }
+    }
+    if (bestPair) break;
+  }
+
+  const pair = bestPair || (() => {
+    const sh = recentHighs[0], sl = recentLows[0];
+    if (sh.price <= sl.price) return null;
+    return { H: sh.price, L: sl.price, sh, sl, highFirst: sh.index < sl.index };
+  })();
+  if (!pair) return null;
+
+  const { H, L, sh, sl, highFirst } = pair;
+  const range = H - L;
+  const qhi  = r(L + range * 0.75);
+  const qp   = r(L + range * 0.50);
+  const qmid = r(L + range * 0.25);
+  const qlo  = r(L);
+  const triggered = bestPair !== null;
+
+  let trend = 'NEUTRAL';
+  if (currentPrice > qp && currentPrice > qmid) trend = 'UP';
+  else if (currentPrice < qp && currentPrice < qmid) trend = 'DOWN';
+
+  return {
+    qhi, qp, qmid, qlo,
+    swing_high: r(H), swing_low: r(L),
+    swing_high_time: sh.time || null,
+    swing_low_time: sl.time || null,
+    triggered,
+    trend,
+    price_zone: classifyPriceZone(currentPrice, qhi, qp, qmid, qlo),
+  };
+}
+
+let qpCache = { ts: 0, data: null };
+const QP_CACHE_TTL = 5 * 60 * 1000;
+
+app.get('/api/qpoints', async (req, res) => {
+  try {
+    if (qpCache.data && (Date.now() - qpCache.ts) < QP_CACHE_TTL) {
+      return res.json(qpCache.data);
+    }
+
+    const instruments = Object.keys(QP_TICKER_MAP);
+    const results = {};
+
+    await Promise.all(instruments.map(async (sym) => {
+      const ticker = QP_TICKER_MAP[sym];
+      try {
+        const period2 = Math.floor(Date.now() / 1000);
+        const period1 = period2 - (180 * 24 * 60 * 60);
+        const d1Url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1d`;
+        const d1Resp = await fetch(d1Url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!d1Resp.ok) throw new Error(`Yahoo D1 ${ticker} HTTP ${d1Resp.status}`);
+        const d1Json = await d1Resp.json();
+        const d1Result = d1Json?.chart?.result?.[0];
+        if (!d1Result) throw new Error(`No D1 data for ${ticker}`);
+
+        const d1Quotes = d1Result.indicators.quote[0];
+        const d1Candles = d1Result.timestamp.map((t, i) => ({
+          time: new Date(t * 1000).toISOString().split('T')[0],
+          open: d1Quotes.open[i], high: d1Quotes.high[i], low: d1Quotes.low[i], close: d1Quotes.close[i],
+        })).filter(c => c.high && c.low && c.close);
+
+        const currentPrice = d1Candles[d1Candles.length - 1]?.close;
+        if (!currentPrice || d1Candles.length < 20) throw new Error('Insufficient D1 data');
+
+        const d1Swings = findSwings(d1Candles, 5);
+        const d1Qp = buildQpFromSwings(d1Swings.highs, d1Swings.lows, currentPrice);
+
+        const h4Bars = await fetchH4Bars(ticker);
+        let h4Qp = null;
+        if (h4Bars.length >= 20) {
+          const h4Candles = h4Bars.map(b => ({
+            ...b, time: b.ts ? new Date(b.ts * 1000).toISOString().split('T')[0] : null,
+          }));
+          const h4Swings = findSwings(h4Candles, 3);
+          h4Qp = buildQpFromSwings(h4Swings.highs, h4Swings.lows, currentPrice);
+        }
+
+        const emptyQp = { qhi: null, qp: null, qmid: null, qlo: null, swing_high: null, swing_low: null, triggered: false, trend: 'NEUTRAL', price_zone: null };
+        results[sym] = {
+          price: Math.round(currentPrice * 100) / 100,
+          d1: d1Qp || emptyQp,
+          h4: h4Qp || emptyQp,
+        };
+      } catch (err) {
+        console.warn(`[QPoints] ${sym}: ${err.message}`);
+        results[sym] = { price: null, d1: null, h4: null, error: err.message };
+      }
+    }));
+
+    const response = { ...results, timestamp: new Date().toISOString(), method: 'swing_quartiles' };
+    qpCache = { ts: Date.now(), data: response };
+    res.json(response);
+  } catch (err) {
+    console.error('[QPoints]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // ââ /api/h4-zones â H4 Supply/Demand Zone Detection âââââââââââââââââââââââââ
 app.get('/api/h4-zones', async (req, res) => {
   const symbol = req.query.symbol || 'ES=F';
