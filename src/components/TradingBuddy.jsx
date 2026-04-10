@@ -173,6 +173,10 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const [elKeyStored, setElKeyStored] = useState(() => {
     try { return !!localStorage.getItem("elevenlabs_key"); } catch { return false; }
   });
+  const [voiceIdInput, setVoiceIdInput] = useState("");
+  const [currentVoiceId, setCurrentVoiceId] = useState(() => {
+    try { return localStorage.getItem("elevenlabs_voice_id") || LILY_VOICE_ID; } catch { return LILY_VOICE_ID; }
+  });
   const [settingsMsg, setSettingsMsg] = useState("");
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
@@ -193,9 +197,10 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
         .substring(0, 1000);
 
       const elKey = localStorage.getItem("elevenlabs_key");
+      const voiceId = localStorage.getItem("elevenlabs_voice_id") || LILY_VOICE_ID;
       if (elKey) {
         const response = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${LILY_VOICE_ID}/stream`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
           {
             method: "POST",
             headers: { "xi-api-key": elKey, "Content-Type": "application/json", "Accept": "audio/mpeg" },
@@ -471,11 +476,104 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
               CLEAR
             </button>
           </div>
+          <div style={{
+            fontSize: 10,
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: "#94a3b8",
+            letterSpacing: "0.08em",
+            marginTop: 14,
+            marginBottom: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}>
+            <span>VOICE ID</span>
+            <span style={{ fontSize: 9, color: "#475569" }}>current:</span>
+            <code style={{
+              fontSize: 9,
+              color: "#a78bfa",
+              background: "rgba(108,99,255,0.08)",
+              padding: "1px 6px",
+              borderRadius: 3,
+            }}>{currentVoiceId}</code>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="text"
+              value={voiceIdInput}
+              onChange={(e) => { setVoiceIdInput(e.target.value); setSettingsMsg(""); }}
+              placeholder="paste new voice ID (e.g. 1hlpeD1ydbI2ow0Tt3EW)"
+              autoComplete="off"
+              spellCheck={false}
+              style={{
+                flex: 1,
+                background: "#0d1117",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 6,
+                padding: "8px 12px",
+                color: "#e2e8f0",
+                fontSize: 12,
+                fontFamily: "'IBM Plex Mono', monospace",
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={() => {
+                const v = voiceIdInput.trim();
+                if (!v) { setSettingsMsg("Paste a voice ID first"); return; }
+                try {
+                  localStorage.setItem("elevenlabs_voice_id", v);
+                  setCurrentVoiceId(v);
+                  setVoiceIdInput("");
+                  setSettingsMsg("✓ Voice ID saved. Send a message to test.");
+                } catch (err) {
+                  setSettingsMsg("Failed to save: " + err.message);
+                }
+              }}
+              style={{
+                background: "#6c63ff",
+                border: "none",
+                borderRadius: 6,
+                padding: "8px 14px",
+                color: "#fff",
+                fontSize: 11,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                cursor: "pointer",
+              }}
+            >
+              SAVE
+            </button>
+            <button
+              onClick={() => {
+                try {
+                  localStorage.removeItem("elevenlabs_voice_id");
+                  setCurrentVoiceId(LILY_VOICE_ID);
+                  setVoiceIdInput("");
+                  setSettingsMsg("Voice ID reset to default");
+                } catch {}
+              }}
+              title="Reset to default voice ID"
+              style={{
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: 6,
+                padding: "8px 12px",
+                color: "#94a3b8",
+                fontSize: 10,
+                fontFamily: "'IBM Plex Mono', monospace",
+                cursor: "pointer",
+              }}
+            >
+              RESET
+            </button>
+          </div>
           {settingsMsg && (
             <div style={{
               fontSize: 10,
               color: settingsMsg.startsWith("✓") ? "#22c55e" : "#ef4444",
-              marginTop: 6,
+              marginTop: 8,
               fontFamily: "'IBM Plex Mono', monospace",
             }}>
               {settingsMsg}
@@ -484,11 +582,13 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
           <div style={{
             fontSize: 9,
             color: "#475569",
-            marginTop: 6,
+            marginTop: 8,
             fontFamily: "'IBM Plex Mono', monospace",
             lineHeight: 1.5,
           }}>
-            Get a key at elevenlabs.io → Profile → API Keys. Stored only in this browser (localStorage).
+            Get your API key at elevenlabs.io → Profile → API Keys.<br />
+            Get voice IDs at elevenlabs.io → Voices → click a voice → copy ID.<br />
+            Both values stored only in this browser (localStorage).
           </div>
         </div>
       )}
