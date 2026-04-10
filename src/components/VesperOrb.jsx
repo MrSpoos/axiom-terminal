@@ -47,6 +47,22 @@ const STATE_COLORS = {
     pulse: "rgba(248, 113, 113, 0.45)",
     ring: "rgba(248, 113, 113,",
   },
+  scorpio_water: {
+    core: "#04342C",       // deep teal dark edge
+    inner: "#0F6E56",      // teal mid
+    glow: "#5DCAA5",       // bright teal highlight
+    particles: "#9FE1CB",
+    pulse: "rgba(29, 158, 117, 0.35)",
+    ring: "rgba(29, 158, 117,",
+  },
+  aries_fire: {
+    core: "#412402",       // deep amber dark edge
+    inner: "#854F0B",      // amber mid
+    glow: "#EF9F27",       // bright amber highlight
+    particles: "#FAC775",
+    pulse: "rgba(186, 117, 23, 0.45)",
+    ring: "rgba(239, 159, 39,",
+  },
 };
 
 export default function VesperOrb({ state = "idle", size = 120 }) {
@@ -124,7 +140,7 @@ export default function VesperOrb({ state = "idle", size = 120 }) {
 
       // Orbiting particles
       particles.forEach((p) => {
-        p.angle += p.speed * (state === "thinking" ? 2 : 1);
+        p.angle += p.speed * (state === "thinking" ? 2 : state === "aries_fire" ? 2.5 : 1);
         p.radius += Math.sin(frame * 0.05 + p.angle) * 0.3;
 
         const x = cx + Math.cos(p.angle) * p.radius;
@@ -137,11 +153,12 @@ export default function VesperOrb({ state = "idle", size = 120 }) {
         ctx.fill();
       });
 
-      // Energy rings (on signal state)
-      if (state === "signal") {
+      // Energy rings (on signal state + aries_fire when window is open)
+      if (state === "signal" || state === "aries_fire") {
         for (let i = 0; i < 3; i++) {
+          const speed = state === "aries_fire" ? 0.08 : 0.05;
           const ringRadius =
-            radius * (1.1 + i * 0.2) + Math.sin(frame * 0.05 + i) * 3;
+            radius * (1.1 + i * 0.2) + Math.sin(frame * speed + i) * 3;
           ctx.strokeStyle = `${colors.ring} ${0.3 - i * 0.08})`;
           ctx.lineWidth = 1;
           ctx.beginPath();

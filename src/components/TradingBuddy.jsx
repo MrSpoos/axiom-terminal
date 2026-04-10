@@ -16,6 +16,31 @@ function isMarketOpen() {
   const d = et.getDay(), mins = et.getHours() * 60 + et.getMinutes();
   return d >= 1 && d <= 5 && mins >= 570 && mins < 960;
 }
+
+// Orb state selector: signal window = 06:00–08:30 PT on weekdays.
+// Window OPEN → aries_fire (amber, fast rings/particles)
+// Window CLOSED → scorpio_water (teal, calm)
+// Explicit states (speaking/thinking/signal) override the window state.
+function getOrbState(isSpeaking, isThinking, hasActiveSignal) {
+  if (isSpeaking) return "signal";
+  if (isThinking) return "thinking";
+  if (hasActiveSignal) return "signal";
+
+  // Check if signal window is open (06:00–08:30 PT)
+  const now = new Date();
+  const ptOffset = -7; // PDT (UTC-7)
+  const ptHour = (now.getUTCHours() + ptOffset + 24) % 24;
+  const ptMinute = now.getUTCMinutes();
+  const ptTimeMinutes = ptHour * 60 + ptMinute;
+  const windowOpen = ptTimeMinutes >= 360;   // 06:00 PT
+  const windowClose = ptTimeMinutes < 510;   // 08:30 PT
+  const isWeekday = now.getUTCDay() >= 1 && now.getUTCDay() <= 5;
+
+  if (isWeekday && windowOpen && windowClose) {
+    return "aries_fire";   // Signal window OPEN — active, alert
+  }
+  return "scorpio_water";  // Signal window CLOSED — calm, watching
+}
 function renderBold(text) {
   return text.split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
     p.startsWith("**") && p.endsWith("**") ? <strong key={i} style={{ color: "#f59e0b" }}>{p.slice(2,-2)}</strong> : p
@@ -484,15 +509,19 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const biasBorder = BIAS_BORDER[sessionContext.sessionBias?.toLowerCase()] || BIAS_BORDER.default;
   const marketOpen = isMarketOpen();
 
-  // Determine orb state: thinking (API call) → signal (fresh response, briefly) → alert (error) → idle
+  // Tick every 60s so the orb auto-switches when the signal window opens/closes.
+  const [, setOrbTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setOrbTick((t) => t + 1), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Determine orb state — explicit activity beats the window-based default.
   const lastMsg = messages[messages.length - 1];
   const hasRecentSignal = lastMsg?.role === "assistant" &&
     /\b(long|short|entry|stop|target|playbook|pb[1-4])\b/i.test(lastMsg.content || "");
   const hasError = lastMsg?.role === "error";
-  const orbState = loading ? "thinking"
-    : hasError ? "alert"
-    : hasRecentSignal ? "signal"
-    : "idle";
+  const orbState = hasError ? "alert" : getOrbState(speaking, loading, hasRecentSignal);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 120px)", background:"#06060b", borderRadius:8, border:"1px solid rgba(255,255,255,0.06)", overflow:"hidden" }}>
