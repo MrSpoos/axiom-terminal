@@ -178,6 +178,88 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
     try { return localStorage.getItem("elevenlabs_voice_id") || LILY_VOICE_ID; } catch { return LILY_VOICE_ID; }
   });
   const [settingsMsg, setSettingsMsg] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testReport, setTestReport] = useState(null);
+
+  const runVoiceTest = useCallback(async () => {
+    setTesting(true);
+    setTestReport(null);
+    const report = { steps: [] };
+    try {
+      const key = localStorage.getItem("elevenlabs_key");
+      if (!key) {
+        report.steps.push({ ok: false, msg: "No API key in localStorage — save a key first" });
+        setTestReport(report);
+        return;
+      }
+      report.steps.push({ ok: true, msg: `Key present (length ${key.length}, prefix ${key.slice(0, 4)}...)` });
+
+      const voiceId = localStorage.getItem("elevenlabs_voice_id") || LILY_VOICE_ID;
+      const source = localStorage.getItem("elevenlabs_voice_id") ? "localStorage override" : "default constant";
+      report.steps.push({ ok: true, msg: `Voice ID: ${voiceId} (${source})` });
+
+      // Check user info (cheapest call, verifies key)
+      const uRes = await fetch("https://api.elevenlabs.io/v1/user", {
+        headers: { "xi-api-key": key },
+      });
+      if (!uRes.ok) {
+        const body = await uRes.text();
+        report.steps.push({ ok: false, msg: `/v1/user → ${uRes.status} ${uRes.statusText}` });
+        report.steps.push({ ok: false, msg: `Body: ${body.slice(0, 300)}` });
+        setTestReport(report);
+        return;
+      }
+      const user = await uRes.json();
+      report.steps.push({
+        ok: true,
+        msg: `Account OK — tier: ${user.subscription?.tier || "?"}, chars: ${user.subscription?.character_count || 0}/${user.subscription?.character_limit || 0}`,
+      });
+
+      // Check voice exists for this account
+      const vRes = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
+        headers: { "xi-api-key": key },
+      });
+      if (!vRes.ok) {
+        const body = await vRes.text();
+        report.steps.push({ ok: false, msg: `/v1/voices/${voiceId} → ${vRes.status} ${vRes.statusText}` });
+        report.steps.push({ ok: false, msg: `Body: ${body.slice(0, 300)}` });
+        report.steps.push({ ok: false, msg: "→ This voice ID does not exist in your ElevenLabs account. Copy a valid ID from elevenlabs.io/app/voices and save it above." });
+        setTestReport(report);
+        return;
+      }
+      const voice = await vRes.json();
+      report.steps.push({ ok: true, msg: `Voice exists: "${voice.name}" (${voice.category || "?"})` });
+
+      // Do a tiny TTS request to confirm end-to-end
+      const ttsRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+        method: "POST",
+        headers: { "xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg" },
+        body: JSON.stringify({ text: "Test.", model_id: "eleven_turbo_v2_5" }),
+      });
+      if (!ttsRes.ok) {
+        const body = await ttsRes.text();
+        report.steps.push({ ok: false, msg: `TTS stream → ${ttsRes.status} ${ttsRes.statusText}` });
+        report.steps.push({ ok: false, msg: `Body: ${body.slice(0, 300)}` });
+        setTestReport(report);
+        return;
+      }
+      const blob = await ttsRes.blob();
+      report.steps.push({ ok: true, msg: `TTS OK — audio blob ${blob.size} bytes` });
+
+      // Play it so user hears the target voice
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      audio.play().catch(() => {});
+      report.steps.push({ ok: true, msg: "▶ Playing now — if you hear the right voice, all is well." });
+      setTestReport(report);
+    } catch (e) {
+      report.steps.push({ ok: false, msg: `Exception: ${e.message}` });
+      setTestReport(report);
+    } finally {
+      setTesting(false);
+    }
+  }, []);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -589,6 +671,46 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
             Get your API key at elevenlabs.io → Profile → API Keys.<br />
             Get voice IDs at elevenlabs.io → Voices → click a voice → copy ID.<br />
             Both values stored only in this browser (localStorage).
+          </div>
+
+          {/* End-to-end diagnostic */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+            <button
+              onClick={runVoiceTest}
+              disabled={testing}
+              style={{
+                background: testing ? "rgba(108,99,255,0.2)" : "#6c63ff",
+                border: "none",
+                borderRadius: 6,
+                padding: "8px 16px",
+                color: "#fff",
+                fontSize: 11,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                cursor: testing ? "not-allowed" : "pointer",
+              }}
+            >
+              {testing ? "⟳ TESTING..." : "◈ TEST VOICE"}
+            </button>
+            {testReport && (
+              <div style={{
+                marginTop: 10,
+                padding: "10px 12px",
+                background: "rgba(0,0,0,0.3)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 6,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                lineHeight: 1.6,
+              }}>
+                {testReport.steps.map((s, i) => (
+                  <div key={i} style={{ color: s.ok ? "#22c55e" : "#ef4444", wordBreak: "break-word" }}>
+                    {s.ok ? "✓ " : "✗ "}{s.msg}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
