@@ -168,6 +168,12 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const [speaking, setSpeaking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [reflecting, setReflecting] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [elKeyInput, setElKeyInput] = useState("");
+  const [elKeyStored, setElKeyStored] = useState(() => {
+    try { return !!localStorage.getItem("elevenlabs_key"); } catch { return false; }
+  });
+  const [settingsMsg, setSettingsMsg] = useState("");
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -348,11 +354,144 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
             style={{ fontSize:14, background:voiceEnabled?"rgba(0,212,170,0.12)":"rgba(255,255,255,0.04)", border:voiceEnabled?"1px solid rgba(0,212,170,0.3)":"1px solid rgba(255,255,255,0.1)", color:voiceEnabled?"#00d4aa":"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>
             {voiceEnabled ? "🔊" : "🔇"}
           </button>
+          <button
+            onClick={() => setSettingsOpen(o => !o)}
+            title={elKeyStored ? "ElevenLabs key: SAVED" : "ElevenLabs key: NOT SET"}
+            style={{
+              fontSize: 14,
+              background: elKeyStored ? "rgba(0,212,170,0.12)" : "rgba(239,68,68,0.12)",
+              border: elKeyStored ? "1px solid rgba(0,212,170,0.3)" : "1px solid rgba(239,68,68,0.3)",
+              color: elKeyStored ? "#00d4aa" : "#ef4444",
+              borderRadius: 3,
+              padding: "3px 8px",
+              cursor: "pointer",
+              position: "relative",
+            }}
+          >
+            ⚙
+            <span style={{
+              position: "absolute",
+              top: 2,
+              right: 2,
+              width: 5,
+              height: 5,
+              borderRadius: "50%",
+              background: elKeyStored ? "#22c55e" : "#ef4444",
+              boxShadow: elKeyStored ? "0 0 4px #22c55e" : "0 0 4px #ef4444",
+            }} />
+          </button>
           <span style={{ fontSize:9, color:"#334155", fontFamily:"'IBM Plex Mono',monospace" }}>{new Date().toLocaleTimeString("en-US",{ hour:"2-digit", minute:"2-digit", timeZone:"America/New_York" })} ET</span>
           <button onClick={() => { setMessages([]); stopSpeaking(); }} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"transparent", border:"1px solid rgba(255,255,255,0.1)", color:"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>CLEAR</button>
           <button onClick={reflect} disabled={reflecting || messages.length === 0} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:reflecting?"rgba(74,158,255,0.08)":"transparent", border:"1px solid rgba(74,158,255,0.2)", color:reflecting?"#4a9eff":"#4a9eff", borderRadius:3, padding:"3px 8px", cursor:reflecting||messages.length===0?"not-allowed":"pointer", opacity:messages.length===0?0.3:1 }}>{reflecting ? "◈ REFLECTING..." : "◈ REFLECT"}</button>
         </div>
       </div>
+      {settingsOpen && (
+        <div style={{
+          padding: "14px 16px",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          background: "rgba(108,99,255,0.04)",
+          flexShrink: 0,
+        }}>
+          <div style={{
+            fontSize: 10,
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: "#94a3b8",
+            letterSpacing: "0.08em",
+            marginBottom: 6,
+          }}>
+            ELEVENLABS API KEY
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="password"
+              value={elKeyInput}
+              onChange={(e) => { setElKeyInput(e.target.value); setSettingsMsg(""); }}
+              placeholder={elKeyStored ? "•••••••• (saved — paste new to replace)" : "sk_xxxxxxxxxxxxxxxxxxxx"}
+              autoComplete="off"
+              style={{
+                flex: 1,
+                background: "#0d1117",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 6,
+                padding: "8px 12px",
+                color: "#e2e8f0",
+                fontSize: 12,
+                fontFamily: "'IBM Plex Mono', monospace",
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={() => {
+                const v = elKeyInput.trim();
+                if (!v) { setSettingsMsg("Paste a key first"); return; }
+                try {
+                  localStorage.setItem("elevenlabs_key", v);
+                  setElKeyStored(true);
+                  setElKeyInput("");
+                  setSettingsMsg("✓ Saved. Try sending a message.");
+                } catch (err) {
+                  setSettingsMsg("Failed to save: " + err.message);
+                }
+              }}
+              style={{
+                background: "#22c55e",
+                border: "none",
+                borderRadius: 6,
+                padding: "8px 14px",
+                color: "#052e13",
+                fontSize: 11,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                cursor: "pointer",
+              }}
+            >
+              SAVE
+            </button>
+            <button
+              onClick={() => {
+                try {
+                  localStorage.removeItem("elevenlabs_key");
+                  setElKeyStored(false);
+                  setElKeyInput("");
+                  setSettingsMsg("Key cleared");
+                } catch {}
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid rgba(239,68,68,0.3)",
+                borderRadius: 6,
+                padding: "8px 12px",
+                color: "#ef4444",
+                fontSize: 10,
+                fontFamily: "'IBM Plex Mono', monospace",
+                cursor: "pointer",
+              }}
+            >
+              CLEAR
+            </button>
+          </div>
+          {settingsMsg && (
+            <div style={{
+              fontSize: 10,
+              color: settingsMsg.startsWith("✓") ? "#22c55e" : "#ef4444",
+              marginTop: 6,
+              fontFamily: "'IBM Plex Mono', monospace",
+            }}>
+              {settingsMsg}
+            </div>
+          )}
+          <div style={{
+            fontSize: 9,
+            color: "#475569",
+            marginTop: 6,
+            fontFamily: "'IBM Plex Mono', monospace",
+            lineHeight: 1.5,
+          }}>
+            Get a key at elevenlabs.io → Profile → API Keys. Stored only in this browser (localStorage).
+          </div>
+        </div>
+      )}
       {/* Vesper presence — animated energy orb */}
       <div style={{
         display: "flex",
