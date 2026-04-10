@@ -1,13 +1,168 @@
+:root {
+  /* Core palette */
+  --bg-void: #050508;
+  --bg-deep: #08090f;
+  --bg-surface: #0d0e17;
+  --bg-card: #111220;
+  --bg-elevated: #161728;
+  --bg-hover: #1c1e30;
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-dim: rgba(255, 255, 255, 0.08);
+  --border-normal: rgba(255, 255, 255, 0.12);
+  --border-bright: rgba(255, 255, 255, 0.2);
+
+  /* Vesper accent (deep crimson/violet) */
+  --accent-primary: #e94560;
+  --accent-secondary: #6c63ff;
+  --accent-tertiary: #00d4ff;
+
+  /* Trading colors */
+  --bull: #22c55e;
+  --bull-dim: rgba(34, 197, 94, 0.15);
+  --bear: #ef4444;
+  --bear-dim: rgba(239, 68, 68, 0.15);
+  --neutral: #94a3b8;
+
+  /* Glow effects */
+  --glow-accent: 0 0 20px rgba(233, 69, 96, 0.3);
+  --glow-bull: 0 0 20px rgba(34, 197, 94, 0.3);
+  --glow-bear: 0 0 20px rgba(239, 68, 68, 0.3);
+  --glow-info: 0 0 20px rgba(0, 212, 255, 0.3);
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  background: var(--bg-void);
+  color: #e2e8f0;
+  font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "Roboto", system-ui, sans-serif;
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
     monospace;
+}
+
+/* Premium card style */
+.terminal-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.terminal-card:hover {
+  border-color: var(--border-dim);
+}
+
+/* Signal card — glowing */
+.signal-card-bull {
+  background: linear-gradient(
+    135deg,
+    rgba(34, 197, 94, 0.05) 0%,
+    var(--bg-card) 100%
+  );
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  box-shadow: var(--glow-bull);
+  border-radius: 12px;
+}
+
+.signal-card-bear {
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.05) 0%,
+    var(--bg-card) 100%
+  );
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  box-shadow: var(--glow-bear);
+  border-radius: 12px;
+}
+
+/* Tab bar */
+.tab-bar {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 16px;
+}
+
+.tab-active {
+  color: var(--accent-primary);
+  border-bottom: 2px solid var(--accent-primary);
+  text-shadow: 0 0 8px rgba(233, 69, 96, 0.5);
+}
+
+/* Data values */
+.value-bull {
+  color: var(--bull);
+  text-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+}
+
+.value-bear {
+  color: var(--bear);
+  text-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+}
+
+/* Vesper message bubble */
+.vesper-message {
+  background: linear-gradient(
+    135deg,
+    rgba(108, 99, 255, 0.08) 0%,
+    var(--bg-card) 100%
+  );
+  border-left: 2px solid var(--accent-secondary);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+}
+
+/* Conviction bar */
+.conviction-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--accent-secondary),
+    var(--accent-primary)
+  );
+  box-shadow: 0 0 8px var(--accent-primary);
+}
+
+/* Animated pulse dot */
+.status-dot-live {
+  width: 6px;
+  height: 6px;
+  background: var(--bull);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--bull);
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-normal);
+  border-radius: 2px;
 }

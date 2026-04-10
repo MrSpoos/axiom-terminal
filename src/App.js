@@ -771,15 +771,40 @@ export default function Terminal() {
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .terminal-root { animation: fadeIn 0.4s ease both; }
       `}</style>
-      <div style={{ padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.07)", background: "rgba(0,0,0,0.5)", backdropFilter: "blur(10px)", position: "sticky", top: 0, zIndex: 100, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
-            <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.12em", color: "#4a9eff", fontFamily: "'IBM Plex Mono', monospace" }}>AXIOM</span>
-            <span style={{ fontSize: 8, color: "#334155", letterSpacing: "0.2em", fontFamily: "'IBM Plex Mono', monospace" }}>TERMINAL</span>
+      <div style={{ padding: "12px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border-subtle)", background: "rgba(5,5,8,0.85)", backdropFilter: "blur(14px)", position: "sticky", top: 0, zIndex: 100, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{
+              fontSize: 18,
+              color: "var(--accent-primary, #e94560)",
+              textShadow: "0 0 12px rgba(233,69,96,0.55)",
+              lineHeight: 1,
+            }}>◈</span>
+            <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
+              <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.14em", color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>AXIOM</span>
+              <span style={{ fontSize: 8, color: "#64748b", letterSpacing: "0.22em", fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>TERMINAL</span>
+            </div>
           </div>
-          <div style={{ width: 1, height: 28, background: "rgba(255,255,255,0.08)" }} />
+          <div style={{ width: 1, height: 28, background: "var(--border-dim)" }} />
           <nav style={{ display: "flex", gap: 2 }}>
-            {["MARKETS","OPTIONS","MACRO","NEWS","AI DESK","AXIOM EDGE","SETUPS","SESSION BIAS","AGENTS","TRADES","VESPER"].map((item) => (<span key={item} onClick={() => setActiveTab(item)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 4, cursor: "pointer", color: activeTab === item ? "#4a9eff" : "#475569", fontFamily: "'IBM Plex Mono', monospace", background: activeTab === item ? "rgba(74,158,255,0.1)" : "transparent", letterSpacing: "0.06em" }}>{item}</span>))}
+            {["MARKETS","AXIOM EDGE","SETUPS","SESSION BIAS","AGENTS","TRADES","VESPER"].map((item) => {
+              const active = activeTab === item;
+              return (
+                <span key={item} onClick={() => setActiveTab(item)} style={{
+                  fontSize: 10,
+                  padding: "5px 11px",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  color: active ? "var(--accent-primary, #e94560)" : "#64748b",
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  background: active ? "rgba(233,69,96,0.08)" : "transparent",
+                  borderBottom: active ? "2px solid var(--accent-primary, #e94560)" : "2px solid transparent",
+                  letterSpacing: "0.08em",
+                  textShadow: active ? "0 0 8px rgba(233,69,96,0.5)" : "none",
+                  transition: "color 0.15s, background 0.15s",
+                }}>{item}</span>
+              );
+            })}
           </nav>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

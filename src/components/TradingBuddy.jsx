@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { postVesperReflect } from "../services/agentService";
+import VesperOrb from "./VesperOrb";
 
 const API_BASE = process.env.REACT_APP_API_URL || "https://axiom-terminal-production.up.railway.app";
-const LILY_VOICE_ID = "pFZP5JQG7iQjIQuC4Bku";
+const LILY_VOICE_ID = "1hlpeD1ydbI2ow0Tt3EW";
 const BIAS_BORDER = { bullish: "#00d4aa", bearish: "#ff4d6d", neutral: "#f59e0b", default: "#334155" };
 const STARTERS = [
   "What's the best setup right now?",
@@ -322,6 +323,16 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const biasBorder = BIAS_BORDER[sessionContext.sessionBias?.toLowerCase()] || BIAS_BORDER.default;
   const marketOpen = isMarketOpen();
 
+  // Determine orb state: thinking (API call) → signal (fresh response, briefly) → alert (error) → idle
+  const lastMsg = messages[messages.length - 1];
+  const hasRecentSignal = lastMsg?.role === "assistant" &&
+    /\b(long|short|entry|stop|target|playbook|pb[1-4])\b/i.test(lastMsg.content || "");
+  const hasError = lastMsg?.role === "error";
+  const orbState = loading ? "thinking"
+    : hasError ? "alert"
+    : hasRecentSignal ? "signal"
+    : "idle";
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 120px)", background:"#06060b", borderRadius:8, border:"1px solid rgba(255,255,255,0.06)", overflow:"hidden" }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 16px", borderBottom:"1px solid rgba(255,255,255,0.06)", background:"#0a0a10", flexShrink:0 }}>
@@ -340,6 +351,50 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
           <span style={{ fontSize:9, color:"#334155", fontFamily:"'IBM Plex Mono',monospace" }}>{new Date().toLocaleTimeString("en-US",{ hour:"2-digit", minute:"2-digit", timeZone:"America/New_York" })} ET</span>
           <button onClick={() => { setMessages([]); stopSpeaking(); }} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:"transparent", border:"1px solid rgba(255,255,255,0.1)", color:"#475569", borderRadius:3, padding:"3px 8px", cursor:"pointer" }}>CLEAR</button>
           <button onClick={reflect} disabled={reflecting || messages.length === 0} style={{ fontSize:9, fontFamily:"'IBM Plex Mono',monospace", background:reflecting?"rgba(74,158,255,0.08)":"transparent", border:"1px solid rgba(74,158,255,0.2)", color:reflecting?"#4a9eff":"#4a9eff", borderRadius:3, padding:"3px 8px", cursor:reflecting||messages.length===0?"not-allowed":"pointer", opacity:messages.length===0?0.3:1 }}>{reflecting ? "◈ REFLECTING..." : "◈ REFLECT"}</button>
+        </div>
+      </div>
+      {/* Vesper presence — animated energy orb */}
+      <div style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "20px 0 14px",
+        borderBottom: "1px solid var(--border-subtle, rgba(255,255,255,0.04))",
+        background: "radial-gradient(ellipse at center top, rgba(108,99,255,0.04) 0%, transparent 60%)",
+        flexShrink: 0,
+      }}>
+        <VesperOrb state={orbState} size={100} />
+        <div style={{ marginTop: 12, textAlign: "center" }}>
+          <div style={{
+            fontSize: 14,
+            fontWeight: 600,
+            letterSpacing: "0.2em",
+            color: "#e2e8f0",
+            fontFamily: "'IBM Plex Mono', monospace",
+          }}>
+            VESPER
+          </div>
+          <div style={{
+            fontSize: 10,
+            color: "#94a3b8",
+            letterSpacing: "0.12em",
+            marginTop: 3,
+            fontFamily: "'IBM Plex Mono', monospace",
+          }}>
+            CHIEF TRADING OPERATIONS
+          </div>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            justifyContent: "center",
+            marginTop: 8,
+          }}>
+            <span className="status-dot-live" />
+            <span style={{ fontSize: 10, color: "#22c55e", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.1em" }}>
+              {loading ? "THINKING" : hasRecentSignal ? "SIGNAL" : hasError ? "ALERT" : "LIVE"}
+            </span>
+          </div>
         </div>
       </div>
       <div style={{ display:"flex", flexWrap:"wrap", gap:5, padding:"8px 14px", borderBottom:"1px solid rgba(255,255,255,0.05)", background:"#080810", flexShrink:0 }}>
