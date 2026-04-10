@@ -180,6 +180,74 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
   const [settingsMsg, setSettingsMsg] = useState("");
   const [testing, setTesting] = useState(false);
   const [testReport, setTestReport] = useState(null);
+  const [voiceList, setVoiceList] = useState(null);
+  const [voiceListLoading, setVoiceListLoading] = useState(false);
+  const [voiceListError, setVoiceListError] = useState("");
+  const [voiceFilter, setVoiceFilter] = useState("free"); // "free" = premade only, "all" = everything
+  const [previewingId, setPreviewingId] = useState(null);
+
+  const loadVoices = useCallback(async () => {
+    setVoiceListLoading(true);
+    setVoiceListError("");
+    try {
+      const key = localStorage.getItem("elevenlabs_key");
+      if (!key) { setVoiceListError("No API key — save one first"); setVoiceListLoading(false); return; }
+      const r = await fetch("https://api.elevenlabs.io/v1/voices", {
+        headers: { "xi-api-key": key },
+      });
+      if (!r.ok) {
+        setVoiceListError(`${r.status} ${r.statusText}: ${(await r.text()).slice(0, 200)}`);
+        setVoiceListLoading(false);
+        return;
+      }
+      const data = await r.json();
+      setVoiceList(data.voices || []);
+    } catch (e) {
+      setVoiceListError(e.message);
+    } finally {
+      setVoiceListLoading(false);
+    }
+  }, []);
+
+  const previewVoice = useCallback(async (voiceId) => {
+    try {
+      setPreviewingId(voiceId);
+      const key = localStorage.getItem("elevenlabs_key");
+      if (!key) { setPreviewingId(null); return; }
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+        method: "POST",
+        headers: { "xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg" },
+        body: JSON.stringify({
+          text: "Hello. I'm Vesper, chief trading operations.",
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.3, use_speaker_boost: true },
+        }),
+      });
+      if (!r.ok) {
+        alert(`Preview failed: ${r.status} — ${(await r.text()).slice(0, 200)}`);
+        setPreviewingId(null);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => { URL.revokeObjectURL(url); setPreviewingId(null); };
+      audio.onerror = () => { URL.revokeObjectURL(url); setPreviewingId(null); };
+      audio.play();
+    } catch (e) {
+      setPreviewingId(null);
+    }
+  }, []);
+
+  const pickVoice = useCallback((voiceId, voiceName) => {
+    try {
+      localStorage.setItem("elevenlabs_voice_id", voiceId);
+      setCurrentVoiceId(voiceId);
+      setSettingsMsg(`✓ Using ${voiceName || voiceId}`);
+    } catch (err) {
+      setSettingsMsg("Failed to save: " + err.message);
+    }
+  }, []);
 
   const runVoiceTest = useCallback(async () => {
     setTesting(true);
@@ -671,6 +739,171 @@ export default function TradingBuddy({ livePrice, pxConnected }) {
             Get your API key at elevenlabs.io → Profile → API Keys.<br />
             Get voice IDs at elevenlabs.io → Voices → click a voice → copy ID.<br />
             Both values stored only in this browser (localStorage).
+          </div>
+
+          {/* Voice browser */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <button
+                onClick={loadVoices}
+                disabled={voiceListLoading}
+                style={{
+                  background: voiceListLoading ? "rgba(167,139,250,0.2)" : "#a78bfa",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "8px 14px",
+                  color: "#1a0a2e",
+                  fontSize: 11,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontWeight: 700,
+                  letterSpacing: "0.06em",
+                  cursor: voiceListLoading ? "not-allowed" : "pointer",
+                }}
+              >
+                {voiceListLoading ? "⟳ LOADING..." : voiceList ? "↻ REFRESH VOICES" : "◈ BROWSE MY VOICES"}
+              </button>
+              {voiceList && (
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[
+                    { k: "free", l: "FREE-TIER ONLY" },
+                    { k: "all", l: "ALL" },
+                  ].map(f => (
+                    <button
+                      key={f.k}
+                      onClick={() => setVoiceFilter(f.k)}
+                      style={{
+                        fontSize: 9,
+                        padding: "4px 8px",
+                        borderRadius: 3,
+                        border: voiceFilter === f.k ? "1px solid #a78bfa" : "1px solid rgba(255,255,255,0.1)",
+                        background: voiceFilter === f.k ? "rgba(167,139,250,0.15)" : "transparent",
+                        color: voiceFilter === f.k ? "#a78bfa" : "#64748b",
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        cursor: "pointer",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      {f.l}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {voiceListError && (
+              <div style={{ fontSize: 10, color: "#ef4444", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>
+                ✗ {voiceListError}
+              </div>
+            )}
+            {voiceList && (() => {
+              const shown = voiceFilter === "free"
+                ? voiceList.filter(v => v.category === "premade")
+                : voiceList;
+              if (shown.length === 0) {
+                return (
+                  <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "'IBM Plex Mono', monospace", padding: 8 }}>
+                    No voices in this filter. Try "ALL" — note: non-premade voices require a paid ElevenLabs plan.
+                  </div>
+                );
+              }
+              return (
+                <div style={{
+                  maxHeight: 260,
+                  overflowY: "auto",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.3)",
+                }}>
+                  {shown.map((v) => {
+                    const isActive = v.voice_id === currentVoiceId;
+                    const labels = v.labels || {};
+                    const descParts = [labels.accent, labels.gender, labels.age, labels.use_case].filter(Boolean);
+                    const isPremade = v.category === "premade";
+                    return (
+                      <div key={v.voice_id} style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 12px",
+                        borderBottom: "1px solid rgba(255,255,255,0.04)",
+                        background: isActive ? "rgba(34,197,94,0.08)" : "transparent",
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                            <span style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: "#e2e8f0",
+                              fontFamily: "'IBM Plex Mono', monospace",
+                            }}>
+                              {v.name}
+                            </span>
+                            <span style={{
+                              fontSize: 8,
+                              padding: "1px 5px",
+                              borderRadius: 2,
+                              background: isPremade ? "rgba(34,197,94,0.15)" : "rgba(245,158,11,0.15)",
+                              color: isPremade ? "#22c55e" : "#f59e0b",
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              letterSpacing: "0.04em",
+                            }}>
+                              {isPremade ? "FREE" : (v.category || "?").toUpperCase()}
+                            </span>
+                            {isActive && (
+                              <span style={{ fontSize: 8, color: "#22c55e", fontFamily: "'IBM Plex Mono', monospace" }}>● ACTIVE</span>
+                            )}
+                          </div>
+                          {descParts.length > 0 && (
+                            <div style={{ fontSize: 9, color: "#64748b", fontFamily: "'IBM Plex Mono', monospace" }}>
+                              {descParts.join(" · ")}
+                            </div>
+                          )}
+                          {v.description && (
+                            <div style={{ fontSize: 9, color: "#475569", marginTop: 2, lineHeight: 1.4 }}>
+                              {v.description.slice(0, 100)}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => previewVoice(v.voice_id)}
+                          disabled={previewingId === v.voice_id}
+                          title="Preview voice"
+                          style={{
+                            background: "transparent",
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            color: previewingId === v.voice_id ? "#a78bfa" : "#94a3b8",
+                            borderRadius: 4,
+                            padding: "4px 8px",
+                            fontSize: 10,
+                            cursor: previewingId === v.voice_id ? "default" : "pointer",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                          }}
+                        >
+                          {previewingId === v.voice_id ? "▶" : "🔊"}
+                        </button>
+                        <button
+                          onClick={() => pickVoice(v.voice_id, v.name)}
+                          disabled={isActive}
+                          style={{
+                            background: isActive ? "transparent" : "#22c55e",
+                            border: isActive ? "1px solid rgba(34,197,94,0.3)" : "none",
+                            color: isActive ? "#22c55e" : "#052e13",
+                            borderRadius: 4,
+                            padding: "4px 10px",
+                            fontSize: 10,
+                            fontWeight: 700,
+                            cursor: isActive ? "default" : "pointer",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            letterSpacing: "0.04em",
+                          }}
+                        >
+                          {isActive ? "SET" : "USE"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           {/* End-to-end diagnostic */}
