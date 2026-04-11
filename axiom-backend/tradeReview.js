@@ -167,7 +167,8 @@ Deliver your debrief now.`;
   });
 
   // ── EOD auto-scheduler ──────────────────────────────────────────────────────
-  scheduleEOD(ANTHROPIC_KEY);
+  // DISABLED: Only run trade reviews on user action, not on a timer
+  // scheduleEOD(ANTHROPIC_KEY);
   console.log('✅ Trade review: /api/projectx/accounts, /api/projectx/trades, /api/vesper/review-trade');
 };
 

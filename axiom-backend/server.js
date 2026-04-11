@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+const rateLimit = require('express-rate-limit');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -482,7 +484,7 @@ app.post('/api/ai', async (req, res) => {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: maxTokens,
         stream: true,
         system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${systemPrompt || DEFAULT_SYSTEM}`,
@@ -808,7 +810,7 @@ Calculate stop and targets using the ATR value provided.`;
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1500,
         system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${AXIOM_EDGE_SYSTEM}`,
         messages: [{ role: 'user', content: userPrompt }],
@@ -926,7 +928,7 @@ app.post('/api/analyse-chart', async (req, res) => {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1500,
         system: `Today's date is ${todayDateStr()}.\n\n${CHART_ANALYSIS_SYSTEM}`,
         messages: [{
@@ -1751,7 +1753,7 @@ CRITICAL: Use ONLY these pre-calculated values in the stop, target_1r, target_2r
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1500,
         temperature: 0,
         system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${AUTOSIGNAL_SYSTEM}`,
@@ -2697,7 +2699,7 @@ async function runAgentCall(persona, userContent) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 200,
       temperature: 0,
       system: `Today's date is ${todayDateStr()}.\n\n${persona}`,
@@ -2815,7 +2817,7 @@ async function runSetupAnalysis(contextObj) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 1500,
       temperature: 0,
       system: `Today's date is ${todayDateStr()}. All analysis must be based on current conditions as of this date.\n\n${SETUP_MONITOR_SYSTEM}`,
@@ -3022,7 +3024,7 @@ async function callBiasAgent(agentKey, systemPrompt, userPrompt) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 800,
       temperature: 0,
       system: `Today's date is ${todayDateStr()}.\n\n${systemPrompt}`,
@@ -3312,7 +3314,7 @@ async function runSessionBiasAgent(persona, seed, temperature, maxTokens) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: maxTokens,
       temperature,
       system: `Today's date is ${todayDateStr()}.\n\n${persona}`,
@@ -3570,7 +3572,7 @@ Active Setups: ${sessionContext.activeSetups?.length
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 400,
         temperature: 0.7,
         system: TRADING_BUDDY_SYSTEM + '\n\n' + contextBlock,
@@ -3861,7 +3863,7 @@ Return ONLY this exact JSON (no extra text):
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 400,
         temperature: 0.2,
         system: GEX_AGENT_SYSTEM,
@@ -3929,6 +3931,34 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('');
 });
 
+
+// ── Rate limiting: max 20 Claude calls/hour ─────────────────────────────────
+const claudeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: { error: 'Rate limit exceeded — max 20 Claude calls/hour' },
+});
+app.use('/api/agents', claudeLimiter);
+app.use('/api/vesper', claudeLimiter);
+
+// ── Active hours gate: 06:00–09:00 PT only (bypass with ?force=true) ────────
+app.use('/api/agents', (req, res, next) => {
+  const now = new Date();
+  const ptHour = parseInt(now.toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    hour: 'numeric',
+    hour12: false,
+  }));
+  if (ptHour < 6 || ptHour >= 9) {
+    if (!req.query.force) {
+      return res.json({
+        cached: true,
+        message: 'Outside signal window 06:00-09:00 PT',
+      });
+    }
+  }
+  next();
+});
 
 // ── Axiom AI Agents (Phase 1: Macro + Correlation) ───────────────────────────
 require('./agents')(app);

@@ -283,7 +283,7 @@ ${memoryContext ? '\n' + memoryContext : ''}`;
         const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1500, system: systemPrompt, tools: VESPER_TOOLS, messages: currentMessages }),
+          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, system: systemPrompt, tools: VESPER_TOOLS, messages: currentMessages }),
         });
         if (!aiRes.ok) throw new Error(`Anthropic ${aiRes.status}`);
         const data = await aiRes.json();
@@ -335,7 +335,7 @@ Extract 1-3 specific actionable insights. Return ONLY valid JSON:
       const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 600, messages: [{ role: 'user', content: reflectionPrompt }] }),
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 600, messages: [{ role: 'user', content: reflectionPrompt }] }),
       });
       const aiData = await aiRes.json();
       const text = (aiData?.content?.[0]?.text || '').replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();

@@ -261,8 +261,9 @@ module.exports = function registerGexEnhanced(app, ANTHROPIC_KEY) {
     scheduleNextPull();
   }
 
-  scheduleFlashAlpha();
-  startRthAutoRefresh();
+  // DISABLED: FlashAlpha scheduled pulls and RTH auto-refresh — only run when explicitly called
+  // scheduleFlashAlpha();
+  // startRthAutoRefresh();
 
   // ── GET /api/gex/enhanced ─────────────────────────────────────────────────
   app.get('/api/gex/enhanced', (req, res) => {

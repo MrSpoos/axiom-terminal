@@ -242,8 +242,8 @@ function getPerformanceStats() {
 module.exports = function registerVesperScheduler(app, ANTHROPIC_KEY) {
   const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
 
-  // Start pre-market daily brief scheduler
-  scheduleDailyBrief(ANTHROPIC_KEY, BACKEND_URL);
+  // DISABLED: Stefan gets brief from Vesper at 06:00 PT — this 09:25 ET scheduler is duplicate cost
+  // scheduleDailyBrief(ANTHROPIC_KEY, BACKEND_URL);
 
   // ── GET /api/vesper/stats ───────────────────────────────────────────────────
   app.get('/api/vesper/stats', (req, res) => {
@@ -296,6 +296,6 @@ module.exports = function registerVesperScheduler(app, ANTHROPIC_KEY) {
     }
   });
 
-  console.log('✅ Vesper scheduler: 9:25 AM ET pre-market brief (ES + NQ)');
+  console.log('⏭  Vesper scheduler: 9:25 AM ET pre-market brief DISABLED (duplicate of 06:00 PT Vesper brief)');
   console.log('✅ Vesper routes: GET /api/vesper/stats | GET /api/vesper/brief | POST /api/vesper/predict | POST /api/vesper/outcome');
 };
